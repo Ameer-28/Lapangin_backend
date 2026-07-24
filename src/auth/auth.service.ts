@@ -68,7 +68,12 @@ export class AuthService {
   }
 
   async validateUser(id: string) {
-    return this.prisma.user.findUnique({ where: { id } });
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (user) {
+      const { passwordHash, ...result } = user;
+      return result;
+    }
+    return null;
   }
 
   private generateToken(user: any) {
