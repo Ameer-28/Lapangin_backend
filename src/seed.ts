@@ -385,7 +385,11 @@ async function main() {
   ];
 
   for (const b of bookingsData) {
-    await prisma.booking.create({ data: b });
+    await prisma.booking.upsert({
+      where: { bookingCode: b.bookingCode },
+      update: {},
+      create: b,
+    });
   }
   console.log('✅ Sample bookings created');
 
@@ -396,8 +400,10 @@ async function main() {
   });
 
   for (const booking of completedBookings) {
-    await prisma.review.create({
-      data: {
+    await prisma.review.upsert({
+      where: { bookingId: booking.id },
+      update: {},
+      create: {
         userId: booking.userId,
         venueId: booking.venueId,
         bookingId: booking.id,
