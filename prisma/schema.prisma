@@ -122,6 +122,9 @@ model Booking {
   status          BookingStatus @default(upcoming)
   paymentMethod   String?       @map("payment_method") @db.VarChar(50)
   paymentDetail   String?       @map("payment_detail") @db.VarChar(100)
+  paymentStatus   String        @default("unpaid") @map("payment_status") @db.VarChar(20) // unpaid, pending, paid, failed, expired
+  midtransOrderId String?       @unique @map("midtrans_order_id") @db.VarChar(100)
+  snapToken       String?       @map("snap_token") @db.VarChar(500)
   paidAt          DateTime?     @map("paid_at")
   createdAt       DateTime      @default(now()) @map("created_at")
   updatedAt       DateTime      @updatedAt @map("updated_at")

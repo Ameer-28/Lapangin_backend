@@ -67,6 +67,27 @@ export class AuthService {
     return this.generateToken(user);
   }
 
+  async validateGoogleUser(googleUser: { email: string; fullName: string; avatarUrl?: string }) {
+    let user = await this.prisma.user.findUnique({
+      where: { email: googleUser.email },
+    });
+
+    if (!user) {
+      // Auto-register user from Google if not existing
+      user = await this.prisma.user.create({
+        data: {
+          email: googleUser.email,
+          fullName: googleUser.fullName,
+          avatarUrl: googleUser.avatarUrl,
+          passwordHash: '', // Password hash empty for social login
+          role: 'user',
+        },
+      });
+    }
+
+    return this.generateToken(user);
+  }
+
   async validateUser(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (user) {
