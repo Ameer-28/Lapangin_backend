@@ -41,10 +41,17 @@ export class AuthController {
   @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Google OAuth callback handler' })
   async googleAuthRedirect(@Req() req: any, @Res() res: any) {
-    const tokenResult = await this.authService.validateGoogleUser(req.user);
-    // Redirect to frontend with token
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    return res.redirect(`${frontendUrl}/auth/callback?token=${tokenResult.access_token}`);
+    try {
+      if (!req.user) {
+        return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+      }
+      const tokenResult = await this.authService.validateGoogleUser(req.user);
+      return res.redirect(`${frontendUrl}/auth/callback?token=${tokenResult.access_token}`);
+    } catch (error) {
+      console.error('Google Auth Error:', error);
+      return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
+    }
   }
 
   @Get('profile')

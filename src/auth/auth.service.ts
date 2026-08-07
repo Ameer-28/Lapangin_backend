@@ -68,6 +68,10 @@ export class AuthService {
   }
 
   async validateGoogleUser(googleUser: { email: string; fullName: string; avatarUrl?: string }) {
+    if (!googleUser || !googleUser.email) {
+      throw new UnauthorizedException('Invalid Google user data');
+    }
+
     let user = await this.prisma.user.findUnique({
       where: { email: googleUser.email },
     });
@@ -77,12 +81,20 @@ export class AuthService {
       user = await this.prisma.user.create({
         data: {
           email: googleUser.email,
-          fullName: googleUser.fullName,
-          avatarUrl: googleUser.avatarUrl,
+          fullName: googleUser.fullName || googleUser.email.split('@')[0],
+          avatarUrl: googleUser.avatarUrl || null,
           passwordHash: '', // Password hash empty for social login
           role: 'user',
         },
       });
+    } else {
+      // Update avatar if not present
+      if (!user.avatarUrl && googleUser.avatarUrl) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: { avatarUrl: googleUser.avatarUrl },
+        });
+      }
     }
 
     return this.generateToken(user);

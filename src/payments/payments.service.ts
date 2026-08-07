@@ -17,10 +17,14 @@ export class PaymentsService {
   private snap: any;
 
   constructor(private readonly prisma: PrismaService) {
+    const serverKey = (process.env.MIDTRANS_SERVER_KEY || '').trim();
+    const clientKey = (process.env.MIDTRANS_CLIENT_KEY || '').trim();
+    const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+
     this.snap = new midtransClient.Snap({
-      isProduction: process.env.MIDTRANS_IS_PRODUCTION === 'true',
-      serverKey: process.env.MIDTRANS_SERVER_KEY,
-      clientKey: process.env.MIDTRANS_CLIENT_KEY,
+      isProduction,
+      serverKey,
+      clientKey,
     });
   }
 
