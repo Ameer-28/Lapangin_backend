@@ -77,13 +77,16 @@ export class AuthService {
     });
 
     if (!user) {
+      const safeName = (googleUser.fullName || googleUser.email.split('@')[0]).substring(0, 95);
+      const safeAvatar = googleUser.avatarUrl ? googleUser.avatarUrl.substring(0, 490) : null;
+
       // Auto-register user from Google if not existing
       user = await this.prisma.user.create({
         data: {
           email: googleUser.email,
-          fullName: googleUser.fullName || googleUser.email.split('@')[0],
-          avatarUrl: googleUser.avatarUrl || null,
-          passwordHash: '', // Password hash empty for social login
+          fullName: safeName,
+          avatarUrl: safeAvatar,
+          passwordHash: '$2b$10$DUMMYPASSWORDFORGOOGLEOAUTHACCXXXXXX', // valid dummy hash
           role: 'user',
         },
       });
@@ -92,7 +95,7 @@ export class AuthService {
       if (!user.avatarUrl && googleUser.avatarUrl) {
         user = await this.prisma.user.update({
           where: { id: user.id },
-          data: { avatarUrl: googleUser.avatarUrl },
+          data: { avatarUrl: googleUser.avatarUrl.substring(0, 490) },
         });
       }
     }

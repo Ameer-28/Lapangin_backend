@@ -37,9 +37,9 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         avatarUrl,
         accessToken,
       };
-      done(undefined, user);
+      (done as any)(null, user);
     } catch (err: any) {
-      done(err, false);
+      (done as any)(err, false);
     }
   }
 }
