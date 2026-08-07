@@ -24,12 +24,12 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       const { name, emails, photos, displayName } = profile || {};
       const email = emails && emails[0] ? emails[0].value : null;
       if (!email) {
-        return done(new Error('No email returned from Google'), null);
+        return done(new Error('No email returned from Google'), false);
       }
       const givenName = name?.givenName || '';
       const familyName = name?.familyName || '';
       const fullName = `${givenName} ${familyName}`.trim() || displayName || email.split('@')[0];
-      const avatarUrl = photos && photos[0] ? photos[0].value : null;
+      const avatarUrl = photos && photos[0] ? photos[0].value : undefined;
 
       const user = {
         email,
@@ -37,9 +37,9 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
         avatarUrl,
         accessToken,
       };
-      done(null, user);
-    } catch (err) {
-      done(err, null);
+      done(undefined, user);
+    } catch (err: any) {
+      done(err, false);
     }
   }
 }
