@@ -124,6 +124,7 @@ export class PaymentsService {
         redirectUrl: transaction.redirect_url,
         orderId,
         clientKey: process.env.MIDTRANS_CLIENT_KEY,
+        isProduction,
       };
     } catch (error) {
       this.logger.error(`Failed to create Midtrans transaction: ${error.message}`);
