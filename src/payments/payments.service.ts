@@ -119,6 +119,8 @@ export class PaymentsService {
 
       this.logger.log(`Snap token created for booking ${dto.bookingId}, orderId: ${orderId}`);
 
+      const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
+
       return {
         snapToken: transaction.token,
         redirectUrl: transaction.redirect_url,
