@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateReviewDto } from './dto/create-review.dto';
 
 @Injectable()
 export class ReviewsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly notificationsService: NotificationsService) {}
 
   async create(userId: string, dto: CreateReviewDto) {
     const booking = await this.prisma.booking.findUnique({
@@ -58,6 +59,15 @@ export class ReviewsService {
         reviewCount: venueStats._count.id || 0,
       },
     });
+
+    try {
+      await this.notificationsService.createNotification(
+        userId,
+        'Review Terkirim! ⭐',
+        `Terima kasih telah memberikan rating ${dto.rating} bintang untuk ${booking.venue.name}.`,
+        'review'
+      );
+    } catch (e) {}
 
     return review;
   }

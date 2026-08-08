@@ -1,14 +1,15 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { QueryBookingsDto } from './dto/query-bookings.dto';
 
 @Injectable()
 export class BookingsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private notificationsService: NotificationsService) {}
 
   async create(userId: string, dto: CreateBookingDto) {
-    return await this.prisma.$transaction(async (tx) => {
+    const booking = await this.prisma.$transaction(async (tx) => {
       // 1. Find venue
       const venue = await tx.venue.findUnique({
         where: { id: dto.venueId },
@@ -134,6 +135,19 @@ export class BookingsService {
 
       return booking;
     });
+
+    // Send notification
+    try {
+      await this.notificationsService.createNotification(
+        userId,
+        'Booking Berhasil! 🎉',
+        `Booking ${booking.bookingCode} untuk ${booking.venue?.name || 'venue'} telah berhasil dibuat.`,
+        'booking'
+      );
+    } catch (e) {
+      // Don't fail the booking if notification fails
+    }
+    return booking;
   }
 
   async findAllByUser(userId: string, query: QueryBookingsDto) {
@@ -204,7 +218,7 @@ export class BookingsService {
       throw new BadRequestException(`Cannot cancel booking with status: ${booking.status}`);
     }
 
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const cancelledBooking = await tx.booking.update({
         where: { id },
         data: { status: 'cancelled' }
@@ -217,6 +231,17 @@ export class BookingsService {
 
       return cancelledBooking;
     });
+
+    try {
+      await this.notificationsService.createNotification(
+        userId,
+        'Booking Dibatalkan',
+        `Booking Anda telah berhasil dibatalkan.`,
+        'booking'
+      );
+    } catch (e) {}
+
+    return result;
   }
 
   async rebook(id: string, userId: string) {
@@ -291,7 +316,7 @@ export class BookingsService {
       throw new BadRequestException(`Cannot cancel booking with status: ${booking.status}`);
     }
 
-    return await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const cancelledBooking = await tx.booking.update({
         where: { id },
         data: { status: 'cancelled' }
@@ -304,6 +329,17 @@ export class BookingsService {
 
       return cancelledBooking;
     });
+
+    try {
+      await this.notificationsService.createNotification(
+        booking.userId,
+        'Booking Dibatalkan oleh Admin',
+        `Booking ${booking.bookingCode} telah dibatalkan oleh admin.`,
+        'booking'
+      );
+    } catch (e) {}
+
+    return result;
   }
 
   async getStats() {
