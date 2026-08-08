@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -9,6 +9,14 @@ export class BookingsService {
   constructor(private prisma: PrismaService, private notificationsService: NotificationsService) {}
 
   async create(userId: string, dto: CreateBookingDto) {
+    // Check if user is admin
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user || user.role === 'admin') {
+      throw new ForbiddenException('Akun Admin tidak diperbolehkan melakukan pemesanan lapangan. Silakan gunakan akun customer.');
+    }
+
     const booking = await this.prisma.$transaction(async (tx) => {
       // 1. Find venue
       const venue = await tx.venue.findUnique({
