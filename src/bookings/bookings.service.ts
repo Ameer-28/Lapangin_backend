@@ -8,6 +8,57 @@ import { QueryBookingsDto } from './dto/query-bookings.dto';
 export class BookingsService {
   constructor(private prisma: PrismaService, private notificationsService: NotificationsService) {}
 
+  /**
+   * Automatically mark 'upcoming' bookings as 'completed'
+   * when their scheduled date + startTime + duration has passed.
+   */
+  private async autoCompleteExpiredBookings() {
+    const now = new Date();
+
+    // Find all upcoming bookings
+    const upcomingBookings = await this.prisma.booking.findMany({
+      where: { status: 'upcoming' },
+      select: { id: true, date: true, startTime: true, durationHours: true, userId: true, bookingCode: true },
+    });
+
+    const idsToComplete: string[] = [];
+    const usersToNotify: { userId: string; bookingCode: string }[] = [];
+
+    for (const b of upcomingBookings) {
+      // Parse the booking end time
+      const bookingDate = new Date(b.date);
+      const startHour = parseInt(b.startTime.split(':')[0], 10);
+      const endHour = startHour + (b.durationHours || 1);
+
+      // Build end datetime in UTC (booking dates are stored as UTC midnight)
+      // Adjust for WIB (UTC+7): subtract 7 hours so comparison is accurate
+      const endDateTime = new Date(bookingDate);
+      endDateTime.setUTCHours(endHour - 7, 0, 0, 0);
+
+      if (now >= endDateTime) {
+        idsToComplete.push(b.id);
+        usersToNotify.push({ userId: b.userId, bookingCode: b.bookingCode });
+      }
+    }
+
+    if (idsToComplete.length > 0) {
+      await this.prisma.booking.updateMany({
+        where: { id: { in: idsToComplete } },
+        data: { status: 'completed' },
+      });
+
+      // Send completion notifications (fire-and-forget)
+      for (const { userId, bookingCode } of usersToNotify) {
+        this.notificationsService.createNotification(
+          userId,
+          'Booking Selesai ✅',
+          `Booking ${bookingCode} telah selesai. Yuk beri rating pengalaman bermain Anda!`,
+          'booking'
+        ).catch(() => {});
+      }
+    }
+  }
+
   async create(userId: string, dto: CreateBookingDto) {
     // Check if user is admin
     const user = await this.prisma.user.findUnique({
@@ -159,6 +210,8 @@ export class BookingsService {
   }
 
   async findAllByUser(userId: string, query: QueryBookingsDto) {
+    await this.autoCompleteExpiredBookings();
+
     const { status, page = 1, limit = 10 } = query;
     const skip = (page - 1) * limit;
 
@@ -269,6 +322,8 @@ export class BookingsService {
 
   // Admin methods
   async adminFindAll(query: QueryBookingsDto) {
+    await this.autoCompleteExpiredBookings();
+
     const { status, search, page = 1, limit = 10 } = query;
     const skip = (page - 1) * limit;
 
@@ -351,6 +406,8 @@ export class BookingsService {
   }
 
   async getStats() {
+    await this.autoCompleteExpiredBookings();
+
     const [total, upcoming, completed, cancelled] = await Promise.all([
       this.prisma.booking.count(),
       this.prisma.booking.count({ where: { status: 'upcoming' } }),
