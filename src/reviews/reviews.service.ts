@@ -125,4 +125,25 @@ export class ReviewsService {
     });
     return reviews.map(r => r.venueId);
   }
+
+  async findRecent(limit: number = 6) {
+    return this.prisma.review.findMany({
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: {
+          select: {
+            fullName: true,
+            email: true,
+          },
+        },
+        venue: {
+          select: {
+            name: true,
+            city: true,
+          },
+        },
+      },
+    });
+  }
 }

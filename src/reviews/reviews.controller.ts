@@ -30,6 +30,13 @@ export class ReviewsController {
     return this.reviewsService.findByVenue(venueId, page ? +page : 1, limit ? +limit : 10);
   }
 
+  @Get('reviews/recent')
+  @ApiOperation({ summary: 'Get recent reviews for landing page' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  findRecent(@Query('limit') limit?: string) {
+    return this.reviewsService.findRecent(limit ? +limit : 6);
+  }
+
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
   @Get('reviews/my-reviewed-venues')
