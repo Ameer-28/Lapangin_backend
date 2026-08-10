@@ -78,8 +78,13 @@ export class VenuesService {
 
     // Auto-generate time slots for the day if none exist
     if (slots.length === 0) {
+      const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
+      const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
+      const startHour = isNaN(openHour) ? 7 : openHour;
+      const endHour = isNaN(closeHour) ? 23 : closeHour;
+
       const newSlots = [];
-      for (let i = 7; i <= 22; i++) {
+      for (let i = startHour; i < endHour; i++) {
         const startTime = `${i.toString().padStart(2, '0')}:00`;
         newSlots.push({
           venueId,

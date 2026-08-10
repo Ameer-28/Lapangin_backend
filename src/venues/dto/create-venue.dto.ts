@@ -53,4 +53,14 @@ export class CreateVenueDto {
   @IsArray()
   @IsString({ each: true })
   facilities?: string[];
+
+  @ApiPropertyOptional({ example: '07:00' })
+  @IsOptional()
+  @IsString()
+  openTime?: string;
+
+  @ApiPropertyOptional({ example: '23:00' })
+  @IsOptional()
+  @IsString()
+  closeTime?: string;
 }
