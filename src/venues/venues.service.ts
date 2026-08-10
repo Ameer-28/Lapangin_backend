@@ -71,18 +71,24 @@ export class VenuesService {
 
     const dateObj = new Date(dateStr + 'T00:00:00.000Z');
 
+    const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
+    const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
+    const startHour = isNaN(openHour) ? 7 : openHour;
+    const endHour = isNaN(closeHour) ? 23 : closeHour;
+
     let slots = await this.prisma.timeSlot.findMany({
       where: { venueId, date: dateObj },
       orderBy: { startTime: 'asc' },
     });
 
+    // Filter out any existing database slots outside the venue's operating hours
+    slots = slots.filter(slot => {
+      const h = parseInt(slot.startTime.split(':')[0], 10);
+      return !isNaN(h) && h >= startHour && h < endHour;
+    });
+
     // Auto-generate time slots for the day if none exist
     if (slots.length === 0) {
-      const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
-      const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
-      const startHour = isNaN(openHour) ? 7 : openHour;
-      const endHour = isNaN(closeHour) ? 23 : closeHour;
-
       const newSlots = [];
       for (let i = startHour; i < endHour; i++) {
         const startTime = `${i.toString().padStart(2, '0')}:00`;
@@ -101,6 +107,11 @@ export class VenuesService {
       slots = await this.prisma.timeSlot.findMany({
         where: { venueId, date: dateObj },
         orderBy: { startTime: 'asc' },
+      });
+
+      slots = slots.filter(slot => {
+        const h = parseInt(slot.startTime.split(':')[0], 10);
+        return !isNaN(h) && h >= startHour && h < endHour;
       });
     }
 

@@ -79,6 +79,13 @@ export class BookingsService {
 
       // 2. Check time slots availability
       const startHour = parseInt(dto.startTime.split(':')[0], 10);
+      const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
+      const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
+
+      if (startHour < openHour || (startHour + dto.durationHours) > closeHour) {
+        throw new BadRequestException(`Pemesanan melebihi jam operasional venue (${venue.openTime || '07:00'} - ${venue.closeTime || '23:00'}).`);
+      }
+
       const slotsToCheck = [];
       for (let i = 0; i < dto.durationHours; i++) {
         slotsToCheck.push(`${(startHour + i).toString().padStart(2, '0')}:00`);
