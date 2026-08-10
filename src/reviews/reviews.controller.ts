@@ -29,4 +29,12 @@ export class ReviewsController {
   ) {
     return this.reviewsService.findByVenue(venueId, page ? +page : 1, limit ? +limit : 10);
   }
+
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard)
+  @Get('reviews/my-reviewed-venues')
+  @ApiOperation({ summary: 'Get venue IDs that current user has already reviewed' })
+  getReviewedVenues(@CurrentUser() user: any) {
+    return this.reviewsService.getReviewedVenueIds(user.sub);
+  }
 }

@@ -27,12 +27,25 @@ export class ReviewsService {
       throw new BadRequestException('You can only review completed bookings');
     }
 
-    const existingReview = await this.prisma.review.findUnique({
+    // Check if this user has already reviewed THIS VENUE (1 review per user per venue)
+    const existingVenueReview = await this.prisma.review.findFirst({
+      where: {
+        userId: userId,
+        venueId: booking.venueId,
+      },
+    });
+
+    if (existingVenueReview) {
+      throw new BadRequestException('Anda sudah pernah memberikan rating untuk venue ini. Satu user hanya bisa memberi satu rating per venue.');
+    }
+
+    // Also check per booking (safety net)
+    const existingBookingReview = await this.prisma.review.findUnique({
       where: { bookingId: dto.bookingId },
     });
 
-    if (existingReview) {
-      throw new BadRequestException('A review for this booking already exists');
+    if (existingBookingReview) {
+      throw new BadRequestException('Review untuk booking ini sudah ada.');
     }
 
     const review = await this.prisma.review.create({
@@ -102,5 +115,14 @@ export class ReviewsService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async getReviewedVenueIds(userId: string): Promise<string[]> {
+    const reviews = await this.prisma.review.findMany({
+      where: { userId },
+      select: { venueId: true },
+      distinct: ['venueId'],
+    });
+    return reviews.map(r => r.venueId);
   }
 }
