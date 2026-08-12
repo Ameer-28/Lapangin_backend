@@ -46,7 +46,7 @@ model User {
   phone               String?   @db.VarChar(20)
   city                String?   @db.VarChar(100)
   passwordHash        String    @map("password_hash") @db.VarChar(255)
-  avatarUrl           String?   @map("avatar_url") @db.VarChar(500)
+  avatarUrl           String?   @map("avatar_url") @db.Text
   role                UserRole  @default(user)
   status              UserStatus @default(active)
   emailNotifications  Boolean   @default(true) @map("email_notifications")

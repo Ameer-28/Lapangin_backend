@@ -19,6 +19,6 @@ export class UpdateProfileDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
-  @IsUrl()
+  @IsString()
   avatarUrl?: string;
 }
