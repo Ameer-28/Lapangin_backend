@@ -73,8 +73,12 @@ export class VenuesService {
 
     const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
     const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
-    const startHour = isNaN(openHour) ? 7 : openHour;
-    const endHour = isNaN(closeHour) ? 23 : closeHour;
+    let startHour = isNaN(openHour) ? 7 : openHour;
+    let endHour = isNaN(closeHour) ? 23 : closeHour;
+    if (endHour <= startHour || (venue.openTime === '00:00' && (venue.closeTime === '24:00' || venue.closeTime === '00:00'))) {
+      startHour = 0;
+      endHour = 24;
+    }
 
     let slots = await this.prisma.timeSlot.findMany({
       where: { venueId, date: dateObj },

@@ -81,8 +81,14 @@ export class BookingsService {
       const startHour = parseInt(dto.startTime.split(':')[0], 10);
       const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
       const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
+      let vOpen = isNaN(openHour) ? 7 : openHour;
+      let vClose = isNaN(closeHour) ? 23 : closeHour;
+      if (vClose <= vOpen || (venue.openTime === '00:00' && (venue.closeTime === '24:00' || venue.closeTime === '00:00'))) {
+        vOpen = 0;
+        vClose = 24;
+      }
 
-      if (startHour < openHour || (startHour + dto.durationHours) > closeHour) {
+      if (startHour < vOpen || (startHour + dto.durationHours) > vClose) {
         throw new BadRequestException(`Pemesanan melebihi jam operasional venue (${venue.openTime || '07:00'} - ${venue.closeTime || '23:00'}).`);
       }
 
