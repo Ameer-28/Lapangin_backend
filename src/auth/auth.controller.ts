@@ -41,7 +41,11 @@ export class AuthController {
   @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Google OAuth callback handler' })
   async googleAuthRedirect(@Req() req: any, @Res() res: any) {
-    const frontendUrl = process.env.FRONTEND_URL || 'https://lapangin-frontend.vercel.app';
+    const isDev = process.env.NODE_ENV === 'development' && !process.env.VERCEL;
+    const envFrontend = process.env.FRONTEND_URL;
+    const frontendUrl = (envFrontend && (!envFrontend.includes('localhost') || isDev))
+      ? envFrontend
+      : 'https://lapangin-frontend.vercel.app';
     try {
       if (!req.user) {
         return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
