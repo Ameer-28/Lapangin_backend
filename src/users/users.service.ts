@@ -22,9 +22,15 @@ export class UsersService {
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const data: any = {};
+    if (dto.fullName !== undefined) data.fullName = dto.fullName.trim() || undefined;
+    if (dto.phone !== undefined) data.phone = dto.phone?.trim() ? dto.phone.trim().substring(0, 20) : null;
+    if (dto.city !== undefined) data.city = dto.city?.trim() ? dto.city.trim().substring(0, 100) : null;
+    if (dto.avatarUrl !== undefined) data.avatarUrl = dto.avatarUrl || null;
+
     const updated = await this.prisma.user.update({
       where: { id: userId },
-      data: dto,
+      data,
     });
     const { passwordHash, ...result } = updated as any;
     return result;
