@@ -76,10 +76,10 @@ export class AuthService {
       where: { email: googleUser.email },
     });
 
-    if (!user) {
-      const safeName = (googleUser.fullName || googleUser.email.split('@')[0]).substring(0, 95);
-      const safeAvatar = googleUser.avatarUrl ? googleUser.avatarUrl.substring(0, 490) : null;
+    const safeName = (googleUser.fullName || googleUser.email.split('@')[0]).substring(0, 95);
+    const safeAvatar = googleUser.avatarUrl ? googleUser.avatarUrl.substring(0, 490) : null;
 
+    if (!user) {
       // Auto-register user from Google if not existing
       user = await this.prisma.user.create({
         data: {
@@ -91,11 +91,18 @@ export class AuthService {
         },
       });
     } else {
-      // Update avatar if not present
-      if (!user.avatarUrl && googleUser.avatarUrl) {
+      // Update fullName and avatar if available from Google
+      const updates: any = {};
+      if (safeName && (!user.fullName || user.fullName === user.email.split('@')[0])) {
+        updates.fullName = safeName;
+      }
+      if (safeAvatar && !user.avatarUrl) {
+        updates.avatarUrl = safeAvatar;
+      }
+      if (Object.keys(updates).length > 0) {
         user = await this.prisma.user.update({
           where: { id: user.id },
-          data: { avatarUrl: googleUser.avatarUrl.substring(0, 490) },
+          data: updates,
         });
       }
     }
@@ -113,9 +120,22 @@ export class AuthService {
   }
 
   private generateToken(user: any) {
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      avatarUrl: user.avatarUrl,
+      role: user.role,
+    };
     return {
       access_token: this.jwtService.sign(payload),
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        avatarUrl: user.avatarUrl,
+        role: user.role,
+      },
     };
   }
 }

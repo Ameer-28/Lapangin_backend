@@ -28,7 +28,8 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google') {
       }
       const givenName = name?.givenName || '';
       const familyName = name?.familyName || '';
-      const fullName = `${givenName} ${familyName}`.trim() || displayName || email.split('@')[0];
+      const constructedName = `${givenName} ${familyName}`.trim();
+      const fullName = displayName || constructedName || email.split('@')[0];
       const avatarUrl = photos && photos[0] ? photos[0].value : undefined;
 
       const user = {
