@@ -15,6 +15,9 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
     const { passwordHash, ...result } = user as any;
+    if (!result.fullName && result.email) {
+      result.fullName = result.email.split('@')[0];
+    }
     return result;
   }
 
