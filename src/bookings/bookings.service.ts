@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -408,7 +408,9 @@ export class BookingsService {
     if (search) {
       where.OR = [
         { bookingCode: { contains: search, mode: 'insensitive' } },
-        { user: { fullName: { contains: search, mode: 'insensitive' } } }
+        { customerName: { contains: search, mode: 'insensitive' } },
+        { user: { fullName: { contains: search, mode: 'insensitive' } } },
+        { venue: { name: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
@@ -420,10 +422,10 @@ export class BookingsService {
         orderBy: { createdAt: 'desc' },
         include: {
           venue: {
-            select: { name: true }
+            select: { name: true, city: true, pricePerHour: true }
           },
           user: {
-            select: { fullName: true, email: true }
+            select: { fullName: true, email: true, phone: true }
           }
         }
       }),
@@ -448,14 +450,17 @@ export class BookingsService {
       throw new NotFoundException('Booking not found');
     }
 
-    if (booking.status !== 'upcoming') {
+    if (booking.status !== 'upcoming' && booking.status !== 'pending_payment') {
       throw new BadRequestException(`Cannot cancel booking with status: ${booking.status}`);
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
       const cancelledBooking = await tx.booking.update({
         where: { id },
-        data: { status: 'cancelled' }
+        data: {
+          status: 'cancelled',
+          paymentStatus: booking.paymentStatus === 'paid' ? 'refunded' : 'failed',
+        }
       });
 
       await tx.timeSlot.updateMany({
@@ -509,29 +514,86 @@ export class BookingsService {
         where: { id: dto.venueId },
       });
       if (!venue || !venue.isActive) {
-        throw new NotFoundException('Active venue not found');
+        throw new NotFoundException('Venue tidak ditemukan atau sedang tidak aktif');
       }
 
-      // Check slot availability
+      // Check operational hours
+      const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
+      const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
       const startHour = parseInt(dto.startTime.split(':')[0], 10);
-      const slotsToCheck = [];
+      const endHour = startHour + dto.durationHours;
+
+      if (startHour < openHour || endHour > closeHour) {
+        throw new BadRequestException(
+          `Waktu booking (${dto.startTime} - ${endHour.toString().padStart(2, '0')}:00) berada di luar jam operasional venue (${venue.openTime} - ${venue.closeTime}).`
+        );
+      }
+
+      // Build array of hourly slots to reserve
+      const slotsToCheck: string[] = [];
       for (let i = 0; i < dto.durationHours; i++) {
         slotsToCheck.push(`${(startHour + i).toString().padStart(2, '0')}:00`);
       }
 
       const bookingDate = new Date(dto.date + 'T00:00:00.000Z');
 
+      // 1. Conflict Check: Overlapping Bookings on the same venue & date
+      const activeBookings = await tx.booking.findMany({
+        where: {
+          venueId: dto.venueId,
+          date: bookingDate,
+          status: { in: ['upcoming', 'pending_payment'] },
+        },
+        include: {
+          user: { select: { fullName: true } },
+        },
+      });
+
+      const now = new Date();
+      for (const ob of activeBookings) {
+        // Skip expired pending holds
+        if (ob.status === 'pending_payment' && ob.paymentExpiresAt && ob.paymentExpiresAt < now) {
+          continue;
+        }
+
+        const obStart = parseInt(ob.startTime.split(':')[0], 10);
+        const obEnd = obStart + ob.durationHours;
+
+        // Interval overlap formula: max(start1, start2) < min(end1, end2)
+        if (Math.max(startHour, obStart) < Math.min(endHour, obEnd)) {
+          const overlapStart = Math.max(startHour, obStart).toString().padStart(2, '0') + ':00';
+          const overlapEnd = Math.min(endHour, obEnd).toString().padStart(2, '0') + ':00';
+          const conflictType = ob.bookingSource && ob.bookingSource !== 'online'
+            ? `Offline Booking / Blokir Slot (${ob.bookingSource})`
+            : ob.status === 'pending_payment'
+              ? 'Hold Pembayaran Online Pelanggan'
+              : 'Booking Terkonfirmasi';
+          const bookedByName = ob.customerName || ob.user?.fullName || 'Customer';
+
+          throw new ConflictException(
+            `Jadwal bentrok pada pukul ${overlapStart} - ${overlapEnd}! Slot sudah dipesan/diblokir oleh ${conflictType} atas nama "${bookedByName}". Silakan pilih jam atau tanggal lain.`
+          );
+        }
+      }
+
+      // 2. Conflict Check: Physical TimeSlots table
       const existingSlots = await tx.timeSlot.findMany({
         where: {
           venueId: dto.venueId,
           date: bookingDate,
           startTime: { in: slotsToCheck },
         },
+        include: {
+          booking: { select: { status: true, customerName: true } },
+        },
       });
 
-      const isAnyBooked = existingSlots.some(slot => slot.isBooked);
-      if (isAnyBooked) {
-        throw new BadRequestException('Satu atau lebih slot waktu yang dipilih sudah terisi atau dibooking.');
+      for (const slot of existingSlots) {
+        if (slot.isBooked && slot.booking?.status !== 'expired' && slot.booking?.status !== 'cancelled') {
+          throw new ConflictException(
+            `Slot jam ${slot.startTime} pada tanggal ${dto.date} sudah terisi atau diblokir. Silakan pilih jam lain.`
+          );
+        }
       }
 
       // Calculate pricing
@@ -543,7 +605,10 @@ export class BookingsService {
       const randomSuffix = Math.floor(100 + Math.random() * 900);
       const bookingCode = `BK-OFFLINE-${currentYear}-${Date.now().toString().slice(-4)}${randomSuffix}`;
 
-      // Create booking record associated with admin
+      // Determine booking source (default: walk_in)
+      const bookingSource = dto.bookingSource || 'walk_in';
+
+      // Create booking record with audit trail
       const booking = await tx.booking.create({
         data: {
           bookingCode,
@@ -557,8 +622,13 @@ export class BookingsService {
           serviceFee: 0,
           total,
           status: 'upcoming',
+          bookingSource,
+          adminNotes: dto.notes,
+          createdBy: adminId,
+          customerName: dto.customerName,
+          customerPhone: dto.customerPhone,
           paymentMethod: dto.paymentMethod || 'cash',
-          paymentDetail: `${dto.customerName}${dto.customerPhone ? ' (' + dto.customerPhone + ')' : ''}${dto.notes ? ' - ' + dto.notes : ''}`,
+          paymentDetail: `${dto.customerName}${dto.customerPhone ? ' (' + dto.customerPhone + ')' : ''} [${bookingSource}]`,
           paymentStatus: dto.paymentStatus || 'paid',
           paidAt: dto.paymentStatus === 'unpaid' ? null : new Date(),
         },
@@ -567,7 +637,7 @@ export class BookingsService {
         },
       });
 
-      // Mark slots as booked
+      // Mark time slots as booked
       for (const time of slotsToCheck) {
         const existingSlot = existingSlots.find(s => s.startTime === time);
         if (existingSlot) {

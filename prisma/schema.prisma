@@ -132,6 +132,11 @@ model Booking {
   paymentStatus   String        @default("pending") @map("payment_status") @db.VarChar(20) // unpaid, pending, paid, failed, expired
   midtransOrderId String?       @unique @map("midtrans_order_id") @db.VarChar(100)
   snapToken       String?       @map("snap_token") @db.VarChar(500)
+  bookingSource   String        @default("online") @map("booking_source") @db.VarChar(50) // online, offline_walkin, offline_whatsapp, offline_phone, maintenance, manual_block
+  adminNotes      String?       @map("admin_notes") @db.Text
+  createdBy       String?       @map("created_by") @db.VarChar(100) // Admin user ID or 'customer'
+  customerName    String?       @map("customer_name") @db.VarChar(150)
+  customerPhone   String?       @map("customer_phone") @db.VarChar(50)
   paidAt          DateTime?     @map("paid_at")
   createdAt       DateTime      @default(now()) @map("created_at")
   updatedAt       DateTime      @updatedAt @map("updated_at")

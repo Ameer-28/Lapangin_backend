@@ -53,4 +53,12 @@ export class CreateAdminBookingDto {
   @IsString()
   @IsOptional()
   notes?: string;
+
+  @ApiPropertyOptional({
+    description: 'Sumber booking / alasan pemblokiran slot',
+    example: 'walk_in',
+  })
+  @IsString()
+  @IsOptional()
+  bookingSource?: string;
 }
