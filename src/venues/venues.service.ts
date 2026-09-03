@@ -71,6 +71,35 @@ export class VenuesService {
 
     const dateObj = new Date(dateStr + 'T00:00:00.000Z');
 
+    // Auto-release any unpaid customer booking slots that exceeded 15 min hold timeout
+    try {
+      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+      const expiredUnpaid = await this.prisma.booking.findMany({
+        where: {
+          venueId,
+          date: dateObj,
+          status: 'upcoming',
+          paymentStatus: { in: ['unpaid', 'pending'] },
+          createdAt: { lt: fifteenMinutesAgo },
+          NOT: { bookingCode: { startsWith: 'BK-OFFLINE' } },
+        },
+        select: { id: true },
+      });
+      if (expiredUnpaid.length > 0) {
+        const expiredIds = expiredUnpaid.map(b => b.id);
+        await this.prisma.$transaction([
+          this.prisma.timeSlot.updateMany({
+            where: { bookingId: { in: expiredIds } },
+            data: { isBooked: false, bookingId: null },
+          }),
+          this.prisma.booking.updateMany({
+            where: { id: { in: expiredIds } },
+            data: { status: 'cancelled', paymentStatus: 'expired' },
+          }),
+        ]);
+      }
+    } catch (_) {}
+
     const openHour = parseInt((venue.openTime || '07:00').split(':')[0], 10);
     const closeHour = parseInt((venue.closeTime || '23:00').split(':')[0], 10);
     let startHour = isNaN(openHour) ? 7 : openHour;

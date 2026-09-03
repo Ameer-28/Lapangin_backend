@@ -142,6 +142,8 @@ export class PaymentsService {
       const statusResponse = await this.snap.transaction.notification(notificationBody);
 
       const orderId = statusResponse.order_id;
+      const statusCode = statusResponse.status_code;
+      const grossAmount = statusResponse.gross_amount;
       const transactionStatus = statusResponse.transaction_status;
       const fraudStatus = statusResponse.fraud_status;
       const paymentType = statusResponse.payment_type;
@@ -149,6 +151,21 @@ export class PaymentsService {
       this.logger.log(
         `Midtrans notification received - OrderID: ${orderId}, Status: ${transactionStatus}, Fraud: ${fraudStatus}`,
       );
+
+      // Verify SHA-512 signature key for security
+      const serverKey = (process.env.MIDTRANS_SERVER_KEY || '').trim();
+      if (serverKey && statusResponse.signature_key) {
+        const crypto = await import('crypto');
+        const expectedSignature = crypto
+          .createHash('sha512')
+          .update(`${orderId}${statusCode}${grossAmount}${serverKey}`)
+          .digest('hex');
+
+        if (expectedSignature !== statusResponse.signature_key) {
+          this.logger.error(`Invalid Midtrans signature for order ${orderId}`);
+          throw new ForbiddenException('Invalid Midtrans signature key');
+        }
+      }
 
       const booking = await this.prisma.booking.findUnique({
         where: { midtransOrderId: orderId },
@@ -183,15 +200,34 @@ export class PaymentsService {
         paymentStatus = 'pending';
       }
 
-      await this.prisma.booking.update({
-        where: { id: booking.id },
-        data: {
-          paymentStatus,
-          paymentMethod: paymentType,
-          paymentDetail: `${paymentType} - ${transactionStatus}`,
-          paidAt,
-        },
-      });
+      // If payment failed, cancelled, or expired, automatically release the booked time slots
+      if (paymentStatus === 'failed' || paymentStatus === 'expired') {
+        await this.prisma.$transaction([
+          this.prisma.timeSlot.updateMany({
+            where: { bookingId: booking.id },
+            data: { isBooked: false, bookingId: null },
+          }),
+          this.prisma.booking.update({
+            where: { id: booking.id },
+            data: {
+              status: 'cancelled',
+              paymentStatus,
+              paymentMethod: paymentType,
+              paymentDetail: `${paymentType} - ${transactionStatus}`,
+            },
+          }),
+        ]);
+      } else {
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: {
+            paymentStatus,
+            paymentMethod: paymentType,
+            paymentDetail: `${paymentType} - ${transactionStatus}`,
+            paidAt,
+          },
+        });
+      }
 
       this.logger.log(
         `Booking ${booking.id} payment status updated to: ${paymentStatus}`,
@@ -200,7 +236,7 @@ export class PaymentsService {
       return { status: 'ok' };
     } catch (error) {
       this.logger.error(`Error handling Midtrans notification: ${error.message}`);
-      throw new BadRequestException('Failed to process payment notification');
+      throw new BadRequestException(error.message || 'Failed to process payment notification');
     }
   }
 

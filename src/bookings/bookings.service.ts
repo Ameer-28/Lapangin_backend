@@ -3,16 +3,71 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { QueryBookingsDto } from './dto/query-bookings.dto';
+import { CreateAdminBookingDto } from './dto/create-admin-booking.dto';
 
 @Injectable()
 export class BookingsService {
   constructor(private prisma: PrismaService, private notificationsService: NotificationsService) {}
 
   /**
+   * Automatically cancel unpaid customer bookings that exceed 15 minutes hold timeout,
+   * releasing the time slots so others can book.
+   */
+  async autoCancelUnpaidBookings() {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+
+    // Find unpaid/pending customer bookings older than 15 minutes
+    const expiredUnpaid = await this.prisma.booking.findMany({
+      where: {
+        status: 'upcoming',
+        paymentStatus: { in: ['unpaid', 'pending'] },
+        createdAt: { lt: fifteenMinutesAgo },
+        NOT: {
+          bookingCode: { startsWith: 'BK-OFFLINE' },
+        },
+      },
+      select: { id: true, bookingCode: true, userId: true },
+    });
+
+    if (expiredUnpaid.length === 0) return;
+
+    const expiredIds = expiredUnpaid.map(b => b.id);
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // 1. Release slots
+        await tx.timeSlot.updateMany({
+          where: { bookingId: { in: expiredIds } },
+          data: { isBooked: false, bookingId: null },
+        });
+
+        // 2. Mark bookings as cancelled / expired
+        await tx.booking.updateMany({
+          where: { id: { in: expiredIds } },
+          data: { status: 'cancelled', paymentStatus: 'expired' },
+        });
+      });
+
+      // Send notifications (fire-and-forget)
+      for (const b of expiredUnpaid) {
+        this.notificationsService.createNotification(
+          b.userId,
+          'Batas Waktu Pembayaran Habis',
+          `Booking ${b.bookingCode} telah dibatalkan otomatis karena pembayaran tidak diselesaikan dalam 15 menit.`,
+          'booking'
+        ).catch(() => {});
+      }
+    } catch (e) {
+      console.error('Error auto-cancelling unpaid bookings:', e);
+    }
+  }
+
+  /**
    * Automatically mark 'upcoming' bookings as 'completed'
    * when their scheduled date + startTime + duration has passed.
    */
   private async autoCompleteExpiredBookings() {
+    await this.autoCancelUnpaidBookings();
     const now = new Date();
 
     // Find all upcoming bookings
@@ -167,6 +222,7 @@ export class BookingsService {
           serviceFee,
           total,
           status: 'upcoming',
+          paymentStatus: 'pending',
           paymentMethod: dto.paymentMethod,
           paymentDetail: dto.paymentDetail,
           promoCode: dto.promoCode,
@@ -434,5 +490,101 @@ export class BookingsService {
       completed,
       cancelled
     };
+  }
+
+  /**
+   * Admin-only offline walk-in booking and manual slot blocking
+   */
+  async adminCreateOfflineBooking(adminId: string, dto: CreateAdminBookingDto) {
+    // 1. Run maintenance/expiration cleanup first
+    await this.autoCancelUnpaidBookings();
+
+    return await this.prisma.$transaction(async (tx) => {
+      // Find venue
+      const venue = await tx.venue.findUnique({
+        where: { id: dto.venueId },
+      });
+      if (!venue || !venue.isActive) {
+        throw new NotFoundException('Active venue not found');
+      }
+
+      // Check slot availability
+      const startHour = parseInt(dto.startTime.split(':')[0], 10);
+      const slotsToCheck = [];
+      for (let i = 0; i < dto.durationHours; i++) {
+        slotsToCheck.push(`${(startHour + i).toString().padStart(2, '0')}:00`);
+      }
+
+      const bookingDate = new Date(dto.date + 'T00:00:00.000Z');
+
+      const existingSlots = await tx.timeSlot.findMany({
+        where: {
+          venueId: dto.venueId,
+          date: bookingDate,
+          startTime: { in: slotsToCheck },
+        },
+      });
+
+      const isAnyBooked = existingSlots.some(slot => slot.isBooked);
+      if (isAnyBooked) {
+        throw new BadRequestException('Satu atau lebih slot waktu yang dipilih sudah terisi atau dibooking.');
+      }
+
+      // Calculate pricing
+      const subtotal = dto.price !== undefined ? dto.price : (venue.pricePerHour * dto.durationHours);
+      const total = subtotal;
+
+      // Generate unique offline booking code
+      const currentYear = new Date().getFullYear().toString();
+      const randomSuffix = Math.floor(100 + Math.random() * 900);
+      const bookingCode = `BK-OFFLINE-${currentYear}-${Date.now().toString().slice(-4)}${randomSuffix}`;
+
+      // Create booking record associated with admin
+      const booking = await tx.booking.create({
+        data: {
+          bookingCode,
+          userId: adminId,
+          venueId: dto.venueId,
+          date: bookingDate,
+          startTime: dto.startTime,
+          durationHours: dto.durationHours,
+          subtotal,
+          discount: 0,
+          serviceFee: 0,
+          total,
+          status: 'upcoming',
+          paymentMethod: dto.paymentMethod || 'cash',
+          paymentDetail: `${dto.customerName}${dto.customerPhone ? ' (' + dto.customerPhone + ')' : ''}${dto.notes ? ' - ' + dto.notes : ''}`,
+          paymentStatus: dto.paymentStatus || 'paid',
+          paidAt: dto.paymentStatus === 'unpaid' ? null : new Date(),
+        },
+        include: {
+          venue: true,
+        },
+      });
+
+      // Mark slots as booked
+      for (const time of slotsToCheck) {
+        const existingSlot = existingSlots.find(s => s.startTime === time);
+        if (existingSlot) {
+          await tx.timeSlot.update({
+            where: { id: existingSlot.id },
+            data: { isBooked: true, bookingId: booking.id },
+          });
+        } else {
+          await tx.timeSlot.create({
+            data: {
+              venueId: dto.venueId,
+              date: bookingDate,
+              startTime: time,
+              isBooked: true,
+              bookingId: booking.id,
+            },
+          });
+        }
+      }
+
+      return booking;
+    });
   }
 }
