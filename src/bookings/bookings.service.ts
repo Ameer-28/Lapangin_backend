@@ -14,14 +14,17 @@ export class BookingsService {
    * releasing the time slots so others can book.
    */
   async autoCancelUnpaidBookings() {
+    const now = new Date();
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
 
-    // Find unpaid/pending customer bookings older than 15 minutes
+    // Find unpaid/pending customer bookings whose payment deadline has passed
     const expiredUnpaid = await this.prisma.booking.findMany({
       where: {
-        status: 'upcoming',
-        paymentStatus: { in: ['unpaid', 'pending'] },
-        createdAt: { lt: fifteenMinutesAgo },
+        OR: [
+          { status: 'pending_payment', paymentExpiresAt: { lt: now } },
+          { status: 'pending_payment', createdAt: { lt: fifteenMinutesAgo } },
+          { status: 'upcoming', paymentStatus: { in: ['unpaid', 'pending'] }, createdAt: { lt: fifteenMinutesAgo } }
+        ],
         NOT: {
           bookingCode: { startsWith: 'BK-OFFLINE' },
         },
@@ -41,10 +44,10 @@ export class BookingsService {
           data: { isBooked: false, bookingId: null },
         });
 
-        // 2. Mark bookings as cancelled / expired
+        // 2. Mark bookings as expired
         await tx.booking.updateMany({
           where: { id: { in: expiredIds } },
-          data: { status: 'cancelled', paymentStatus: 'expired' },
+          data: { status: 'expired', paymentStatus: 'expired' },
         });
       });
 
@@ -53,7 +56,7 @@ export class BookingsService {
         this.notificationsService.createNotification(
           b.userId,
           'Batas Waktu Pembayaran Habis',
-          `Booking ${b.bookingCode} telah dibatalkan otomatis karena pembayaran tidak diselesaikan dalam 15 menit.`,
+          `Booking ${b.bookingCode} telah dibatalkan otomatis karena batas waktu pembayaran 15 menit telah habis.`,
           'booking'
         ).catch(() => {});
       }
@@ -221,10 +224,11 @@ export class BookingsService {
           discount,
           serviceFee,
           total,
-          status: 'upcoming',
+          status: 'pending_payment',
+          paymentExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
           paymentStatus: 'pending',
           paymentMethod: dto.paymentMethod,
-          paymentDetail: dto.paymentDetail,
+          paymentDetail: dto.paymentDetail || 'Menunggu Pembayaran',
           promoCode: dto.promoCode,
         },
         include: {

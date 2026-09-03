@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateSnapTokenDto } from './dto/create-snap-token.dto';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -16,7 +17,10 @@ export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
   private snap: any;
 
-  constructor(private readonly prisma: PrismaService) {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
+  ) {
     const serverKey = (process.env.MIDTRANS_SERVER_KEY || '').trim();
     const clientKey = (process.env.MIDTRANS_CLIENT_KEY || '').trim();
     const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
@@ -176,6 +180,19 @@ export class PaymentsService {
         return { status: 'booking_not_found' };
       }
 
+      // Idempotency: skip if already processed in this state
+      if (booking.status === 'upcoming' && booking.paymentStatus === 'paid') {
+        if (transactionStatus === 'settlement' || transactionStatus === 'capture') {
+          this.logger.log(`Midtrans notification for order ${orderId} already processed (status: upcoming).`);
+          return { status: 'already_processed' };
+        }
+      }
+      if ((booking.status === 'cancelled' || booking.status === 'expired') &&
+          (transactionStatus === 'cancel' || transactionStatus === 'deny' || transactionStatus === 'expire')) {
+        this.logger.log(`Midtrans notification for order ${orderId} already processed as cancelled/expired.`);
+        return { status: 'already_processed' };
+      }
+
       let paymentStatus = booking.paymentStatus;
       let paidAt = booking.paidAt;
 
@@ -200,8 +217,35 @@ export class PaymentsService {
         paymentStatus = 'pending';
       }
 
-      // If payment failed, cancelled, or expired, automatically release the booked time slots
-      if (paymentStatus === 'failed' || paymentStatus === 'expired') {
+      // If payment successful, transition from pending_payment to upcoming
+      if (paymentStatus === 'paid') {
+        await this.prisma.$transaction([
+          this.prisma.timeSlot.updateMany({
+            where: { bookingId: booking.id },
+            data: { isBooked: true },
+          }),
+          this.prisma.booking.update({
+            where: { id: booking.id },
+            data: {
+              status: 'upcoming',
+              paymentStatus: 'paid',
+              paymentMethod: paymentType,
+              paymentDetail: `${paymentType} - ${transactionStatus}`,
+              paidAt: paidAt || new Date(),
+            },
+          }),
+        ]);
+
+        // Send booking confirmation notification
+        try {
+          await this.notificationsService.createNotification(
+            booking.userId,
+            'Pembayaran Berhasil! 🎉',
+            `Pembayaran booking ${booking.bookingCode} telah dikonfirmasi oleh Midtrans. Selamat bermain!`,
+            'booking',
+          );
+        } catch (_) {}
+      } else if (paymentStatus === 'failed' || paymentStatus === 'expired') {
         await this.prisma.$transaction([
           this.prisma.timeSlot.updateMany({
             where: { bookingId: booking.id },
@@ -210,27 +254,35 @@ export class PaymentsService {
           this.prisma.booking.update({
             where: { id: booking.id },
             data: {
-              status: 'cancelled',
+              status: paymentStatus === 'expired' ? 'expired' : 'cancelled',
               paymentStatus,
               paymentMethod: paymentType,
               paymentDetail: `${paymentType} - ${transactionStatus}`,
             },
           }),
         ]);
+
+        try {
+          await this.notificationsService.createNotification(
+            booking.userId,
+            paymentStatus === 'expired' ? 'Batas Pembayaran Habis' : 'Pembayaran Gagal / Dibatalkan',
+            `Transaksi booking ${booking.bookingCode} ${paymentStatus === 'expired' ? 'telah kedaluwarsa' : 'dibatalkan atau gagal'}. Slot waktu telah dilepaskan kembali.`,
+            'booking',
+          );
+        } catch (_) {}
       } else {
         await this.prisma.booking.update({
           where: { id: booking.id },
           data: {
-            paymentStatus,
+            paymentStatus: 'pending',
             paymentMethod: paymentType,
             paymentDetail: `${paymentType} - ${transactionStatus}`,
-            paidAt,
           },
         });
       }
 
       this.logger.log(
-        `Booking ${booking.id} payment status updated to: ${paymentStatus}`,
+        `Booking ${booking.id} status updated to ${paymentStatus === 'paid' ? 'upcoming' : paymentStatus}`,
       );
 
       return { status: 'ok' };

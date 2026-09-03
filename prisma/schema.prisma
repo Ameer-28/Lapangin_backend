@@ -26,9 +26,11 @@ enum VenueType {
 }
 
 enum BookingStatus {
+  pending_payment
   upcoming
   completed
   cancelled
+  expired
 }
 
 enum SettingCategory {
@@ -123,10 +125,11 @@ model Booking {
   serviceFee      Int           @default(5000) @map("service_fee")
   total           Int
   promoCode       String?       @map("promo_code") @db.VarChar(50)
-  status          BookingStatus @default(upcoming)
+  status          BookingStatus @default(pending_payment)
+  paymentExpiresAt DateTime?    @map("payment_expires_at")
   paymentMethod   String?       @map("payment_method") @db.VarChar(50)
   paymentDetail   String?       @map("payment_detail") @db.VarChar(100)
-  paymentStatus   String        @default("unpaid") @map("payment_status") @db.VarChar(20) // unpaid, pending, paid, failed, expired
+  paymentStatus   String        @default("pending") @map("payment_status") @db.VarChar(20) // unpaid, pending, paid, failed, expired
   midtransOrderId String?       @unique @map("midtrans_order_id") @db.VarChar(100)
   snapToken       String?       @map("snap_token") @db.VarChar(500)
   paidAt          DateTime?     @map("paid_at")
