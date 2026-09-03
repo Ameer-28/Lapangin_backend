@@ -63,7 +63,7 @@ export class AuthController {
       const tokenResult = await this.authService.validateGoogleUser(req.user);
       return res.redirect(`${frontendUrl}/auth/callback?token=${tokenResult.access_token}`);
     } catch (error) {
-      console.error('Google Auth Error:', error);
+      console.error('Google Auth Error:', error?.message || 'Unknown error');
       return res.redirect(`${frontendUrl}/login?error=google_auth_failed`);
     }
   }

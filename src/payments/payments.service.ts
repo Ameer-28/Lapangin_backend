@@ -159,11 +159,33 @@ export class PaymentsService {
    */
   async handleNotification(notificationBody: any) {
     try {
+      // 1. FIRST: Verify SHA-512 signature BEFORE any Midtrans API call or DB lookup
+      const serverKey = (process.env.MIDTRANS_SERVER_KEY || '').trim();
+      if (serverKey && notificationBody.signature_key) {
+        const crypto = await import('crypto');
+        const orderId = notificationBody.order_id;
+        const statusCode = notificationBody.status_code;
+        const grossAmount = notificationBody.gross_amount;
+        const expectedSignature = crypto
+          .createHash('sha512')
+          .update(`${orderId}${statusCode}${grossAmount}${serverKey}`)
+          .digest('hex');
+
+        if (expectedSignature !== notificationBody.signature_key) {
+          this.logger.error(`Invalid Midtrans signature for order ${orderId}`);
+          throw new ForbiddenException('Invalid Midtrans signature key');
+        }
+        this.logger.log(`Signature verified for order ${orderId}`);
+      } else if (serverKey && !notificationBody.signature_key) {
+        // Reject notifications without a signature when we have a server key configured
+        this.logger.error('Midtrans notification received without signature_key');
+        throw new ForbiddenException('Missing Midtrans signature key');
+      }
+
+      // 2. Call Midtrans API to get canonical transaction status
       const statusResponse = await this.snap.transaction.notification(notificationBody);
 
       const orderId = statusResponse.order_id;
-      const statusCode = statusResponse.status_code;
-      const grossAmount = statusResponse.gross_amount;
       const transactionStatus = statusResponse.transaction_status;
       const fraudStatus = statusResponse.fraud_status;
       const paymentType = statusResponse.payment_type;
@@ -171,21 +193,6 @@ export class PaymentsService {
       this.logger.log(
         `Midtrans notification received - OrderID: ${orderId}, Status: ${transactionStatus}, Fraud: ${fraudStatus}`,
       );
-
-      // Verify SHA-512 signature key for security
-      const serverKey = (process.env.MIDTRANS_SERVER_KEY || '').trim();
-      if (serverKey && statusResponse.signature_key) {
-        const crypto = await import('crypto');
-        const expectedSignature = crypto
-          .createHash('sha512')
-          .update(`${orderId}${statusCode}${grossAmount}${serverKey}`)
-          .digest('hex');
-
-        if (expectedSignature !== statusResponse.signature_key) {
-          this.logger.error(`Invalid Midtrans signature for order ${orderId}`);
-          throw new ForbiddenException('Invalid Midtrans signature key');
-        }
-      }
 
       const booking = await this.prisma.booking.findUnique({
         where: { midtransOrderId: orderId },
@@ -303,6 +310,9 @@ export class PaymentsService {
 
       return { status: 'ok' };
     } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw error; // Re-throw signature verification errors as-is
+      }
       this.logger.error(`Error handling Midtrans notification: ${error.message}`);
       throw new BadRequestException(error.message || 'Failed to process payment notification');
     }

@@ -94,7 +94,10 @@ export class AuthService {
         },
       });
 
-      console.log(`[PASSWORD RESET] Email: ${user.email}, Token: ${rawToken}`);
+      // Only log token in development — NEVER in production
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[PASSWORD RESET - DEV ONLY] Email: ${user.email}, Token: ${rawToken}`);
+      }
     }
 
     // Do NOT reveal whether an email exists in the system through the response

@@ -403,7 +403,7 @@ export class BookingsService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId?: string, userRole?: string) {
     const booking = await this.prisma.booking.findUnique({
       where: { id },
       include: {
@@ -417,6 +417,10 @@ export class BookingsService {
 
     if (!booking) {
       throw new NotFoundException('Booking not found');
+    }
+
+    if (userId && userRole !== 'admin' && booking.userId !== userId) {
+      throw new ForbiddenException('Anda tidak memiliki izin untuk melihat booking ini');
     }
 
     return booking;

@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 
 import { json, urlencoded } from 'express';
 
@@ -40,6 +41,9 @@ async function bootstrap() {
       },
     }),
   );
+
+  // Global exception filter to mask internal errors and provide safe responses
+  app.useGlobalFilters(new AllExceptionsFilter());
 
   // Swagger API documentation
   const config = new DocumentBuilder()
