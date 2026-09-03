@@ -3,6 +3,7 @@ import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service';
 import { QueryBookingsDto } from './dto/query-bookings.dto';
 import { CreateAdminBookingDto } from './dto/create-admin-booking.dto';
+import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -35,6 +36,16 @@ export class AdminBookingsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.bookingsService.findOne(id);
+  }
+
+  @Patch(':id/reschedule')
+  @ApiOperation({ summary: 'Admin reschedule booking to a new date and time' })
+  adminReschedule(
+    @CurrentUser() admin: any,
+    @Param('id') id: string,
+    @Body() dto: RescheduleBookingDto,
+  ) {
+    return this.bookingsService.adminReschedule(admin.sub, id, dto);
   }
 
   @Patch(':id/cancel')

@@ -3,6 +3,7 @@ import { VenuesService } from './venues.service';
 import { CreateVenueDto } from './dto/create-venue.dto';
 import { UpdateVenueDto } from './dto/update-venue.dto';
 import { QueryVenuesDto } from './dto/query-venues.dto';
+import { CreateVenueClosureDto } from './dto/create-venue-closure.dto';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -26,6 +27,27 @@ export class AdminVenuesController {
   @ApiOperation({ summary: 'Create a new venue' })
   create(@Body() createVenueDto: CreateVenueDto) {
     return this.venuesService.create(createVenueDto);
+  }
+
+  @Post(':id/closures')
+  @ApiOperation({ summary: 'Create an operational closure for a venue' })
+  createClosure(
+    @Param('id') venueId: string,
+    @Body() dto: CreateVenueClosureDto,
+  ) {
+    return this.venuesService.createClosure(venueId, dto);
+  }
+
+  @Get(':id/closures')
+  @ApiOperation({ summary: 'Get all operational closures for a venue' })
+  getClosures(@Param('id') venueId: string) {
+    return this.venuesService.getClosures(venueId);
+  }
+
+  @Delete('closures/:closureId')
+  @ApiOperation({ summary: 'Delete an operational closure' })
+  deleteClosure(@Param('closureId') closureId: string) {
+    return this.venuesService.deleteClosure(closureId);
   }
 
   @Patch(':id')

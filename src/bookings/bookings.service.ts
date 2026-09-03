@@ -1,13 +1,31 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { QueryBookingsDto } from './dto/query-bookings.dto';
 import { CreateAdminBookingDto } from './dto/create-admin-booking.dto';
+import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
 
 @Injectable()
 export class BookingsService {
+  private readonly logger = new Logger(BookingsService.name);
+  private isCancellingUnpaid = false;
+
   constructor(private prisma: PrismaService, private notificationsService: NotificationsService) {}
+
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async handleCronAutoCancelUnpaid() {
+    if (this.isCancellingUnpaid) return;
+    this.isCancellingUnpaid = true;
+    try {
+      await this.autoCancelUnpaidBookings();
+    } catch (err) {
+      this.logger.error('Error during auto-canceling unpaid bookings:', err);
+    } finally {
+      this.isCancellingUnpaid = false;
+    }
+  }
 
   /**
    * Automatically cancel unpaid customer bookings that exceed 15 minutes hold timeout,
@@ -156,6 +174,23 @@ export class BookingsService {
       }
 
       const bookingDate = new Date(dto.date + 'T00:00:00.000Z');
+
+      // Check operational closures
+      const closures = await tx.venueClosure.findMany({
+        where: { venueId: dto.venueId, date: bookingDate },
+      });
+      for (const closure of closures) {
+        if (!closure.startTime && !closure.endTime) {
+          throw new BadRequestException(`Venue sedang tutup pada tanggal ${dto.date} (${closure.reason})`);
+        }
+        const closeStart = parseInt(closure.startTime!.split(':')[0], 10);
+        const closeEnd = parseInt(closure.endTime!.split(':')[0], 10);
+        if (Math.max(startHour, closeStart) < Math.min(startHour + dto.durationHours, closeEnd)) {
+          throw new BadRequestException(
+            `Slot waktu berada dalam periode penutupan venue (${closure.startTime} - ${closure.endTime}: ${closure.reason})`
+          );
+        }
+      }
 
       const existingSlots = await tx.timeSlot.findMany({
         where: {
@@ -659,6 +694,177 @@ export class BookingsService {
       }
 
       return booking;
+    });
+  }
+
+  /**
+   * Admin reschedule booking to a new date and time atomically.
+   */
+  async adminReschedule(adminId: string, bookingId: string, dto: RescheduleBookingDto) {
+    // 1. Fetch existing booking
+    const booking = await this.prisma.booking.findUnique({
+      where: { id: bookingId },
+      include: {
+        venue: true,
+        user: true,
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Booking tidak ditemukan');
+    }
+
+    if (booking.status !== 'upcoming' && booking.status !== 'pending_payment') {
+      throw new BadRequestException(`Tidak dapat menjadwalkan ulang booking dengan status: ${booking.status}`);
+    }
+
+    // 2. Clean up expired holds
+    await this.autoCancelUnpaidBookings();
+
+    const openHour = parseInt((booking.venue.openTime || '07:00').split(':')[0], 10);
+    const closeHour = parseInt((booking.venue.closeTime || '23:00').split(':')[0], 10);
+    const newStartHour = parseInt(dto.newStartTime.split(':')[0], 10);
+    const newEndHour = newStartHour + booking.durationHours;
+
+    if (newStartHour < openHour || newEndHour > closeHour) {
+      throw new BadRequestException(
+        `Jadwal baru (${dto.newStartTime} - ${newEndHour.toString().padStart(2, '0')}:00) berada di luar jam operasional venue (${booking.venue.openTime} - ${booking.venue.closeTime}).`
+      );
+    }
+
+    const newBookingDate = new Date(dto.newDate + 'T00:00:00.000Z');
+    const newSlotsToCheck: string[] = [];
+    for (let i = 0; i < booking.durationHours; i++) {
+      newSlotsToCheck.push(`${(newStartHour + i).toString().padStart(2, '0')}:00`);
+    }
+
+    return await this.prisma.$transaction(async (tx) => {
+      // 3. Check venue closures
+      const closures = await tx.venueClosure.findMany({
+        where: { venueId: booking.venueId, date: newBookingDate },
+      });
+
+      for (const closure of closures) {
+        if (!closure.startTime && !closure.endTime) {
+          throw new ConflictException(`Venue tutup pada tanggal ${dto.newDate} karena: ${closure.reason}`);
+        }
+        const closeStart = parseInt(closure.startTime!.split(':')[0], 10);
+        const closeEnd = parseInt(closure.endTime!.split(':')[0], 10);
+        if (Math.max(newStartHour, closeStart) < Math.min(newEndHour, closeEnd)) {
+          throw new ConflictException(
+            `Jadwal baru bertabrakan dengan penutupan operasional venue (${closure.startTime} - ${closure.endTime}: ${closure.reason})`
+          );
+        }
+      }
+
+      // 4. Check overlapping bookings (excluding the current booking itself)
+      const activeBookings = await tx.booking.findMany({
+        where: {
+          venueId: booking.venueId,
+          date: newBookingDate,
+          id: { not: bookingId },
+          status: { in: ['upcoming', 'pending_payment'] },
+        },
+        include: {
+          user: { select: { fullName: true } },
+        },
+      });
+
+      const now = new Date();
+      for (const ob of activeBookings) {
+        if (ob.status === 'pending_payment' && ob.paymentExpiresAt && ob.paymentExpiresAt < now) {
+          continue;
+        }
+        const obStart = parseInt(ob.startTime.split(':')[0], 10);
+        const obEnd = obStart + ob.durationHours;
+
+        if (Math.max(newStartHour, obStart) < Math.min(newEndHour, obEnd)) {
+          const conflictType = ob.bookingSource && ob.bookingSource !== 'online'
+            ? `Booking Offline (${ob.bookingSource})`
+            : ob.status === 'pending_payment'
+              ? 'Hold Online'
+              : 'Booking Terkonfirmasi';
+          const bookedByName = ob.customerName || ob.user?.fullName || 'Customer';
+          throw new ConflictException(
+            `Jadwal baru bentrok dengan ${conflictType} atas nama "${bookedByName}" pada jam ${ob.startTime}. Silakan pilih waktu lain.`
+          );
+        }
+      }
+
+      // 5. Check physical time slots
+      const existingSlots = await tx.timeSlot.findMany({
+        where: {
+          venueId: booking.venueId,
+          date: newBookingDate,
+          startTime: { in: newSlotsToCheck },
+        },
+        include: {
+          booking: { select: { status: true, customerName: true } },
+        },
+      });
+
+      for (const slot of existingSlots) {
+        if (slot.isBooked && slot.bookingId !== bookingId && slot.booking?.status !== 'expired' && slot.booking?.status !== 'cancelled') {
+          throw new ConflictException(`Slot jam ${slot.startTime} pada tanggal ${dto.newDate} sudah terisi.`);
+        }
+      }
+
+      // 6. Release old slots
+      await tx.timeSlot.updateMany({
+        where: { bookingId },
+        data: { isBooked: false, bookingId: null },
+      });
+
+      // 7. Reserve new slots
+      for (const time of newSlotsToCheck) {
+        const existingSlot = existingSlots.find(s => s.startTime === time);
+        if (existingSlot) {
+          await tx.timeSlot.update({
+            where: { id: existingSlot.id },
+            data: { isBooked: true, bookingId },
+          });
+        } else {
+          await tx.timeSlot.create({
+            data: {
+              venueId: booking.venueId,
+              date: newBookingDate,
+              startTime: time,
+              isBooked: true,
+              bookingId,
+            },
+          });
+        }
+      }
+
+      // 8. Update booking record
+      const oldDateStr = booking.date ? new Date(booking.date).toISOString().split('T')[0] : '';
+      const rescheduleLog = `[Rescheduled by Admin on ${new Date().toISOString()}: ${oldDateStr} ${booking.startTime} -> ${dto.newDate} ${dto.newStartTime}. Reason: ${dto.reason || '-'}]`;
+      const updatedAdminNotes = booking.adminNotes ? `${booking.adminNotes}\n${rescheduleLog}` : rescheduleLog;
+
+      const updatedBooking = await tx.booking.update({
+        where: { id: bookingId },
+        data: {
+          date: newBookingDate,
+          startTime: dto.newStartTime,
+          adminNotes: updatedAdminNotes,
+        },
+        include: {
+          venue: true,
+          user: true,
+        },
+      });
+
+      // 9. Notify customer
+      try {
+        await this.notificationsService.createNotification(
+          booking.userId,
+          'Jadwal Booking Diubah 📅',
+          `Booking ${booking.bookingCode} telah di-reschedule oleh admin ke tanggal ${dto.newDate} pukul ${dto.newStartTime}.${dto.reason ? ' Alasan: ' + dto.reason : ''}`,
+          'booking'
+        );
+      } catch (_) {}
+
+      return updatedBooking;
     });
   }
 }

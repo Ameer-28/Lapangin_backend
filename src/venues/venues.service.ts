@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { QueryVenuesDto } from './dto/query-venues.dto';
 import { CreateVenueDto } from './dto/create-venue.dto';
 import { UpdateVenueDto } from './dto/update-venue.dto';
+import { CreateVenueClosureDto } from './dto/create-venue-closure.dto';
 
 @Injectable()
 export class VenuesService {
@@ -148,12 +149,39 @@ export class VenuesService {
       });
     }
 
-    return slots.map(slot => ({
-      id: slot.id,
-      startTime: slot.startTime,
-      isBooked: slot.isBooked,
-      price: venue.pricePerHour,
-    }));
+    const closures = await this.prisma.venueClosure.findMany({
+      where: { venueId, date: dateObj },
+    });
+
+    return slots.map(slot => {
+      let isClosed = false;
+      let closureReason: string | undefined;
+      const slotH = parseInt(slot.startTime.split(':')[0], 10);
+
+      for (const c of closures) {
+        if (!c.startTime && !c.endTime) {
+          isClosed = true;
+          closureReason = c.reason;
+          break;
+        }
+        const cStart = parseInt((c.startTime || '00:00').split(':')[0], 10);
+        const cEnd = parseInt((c.endTime || '24:00').split(':')[0], 10);
+        if (slotH >= cStart && slotH < cEnd) {
+          isClosed = true;
+          closureReason = c.reason;
+          break;
+        }
+      }
+
+      return {
+        id: slot.id,
+        startTime: slot.startTime,
+        isBooked: slot.isBooked || isClosed,
+        isClosed,
+        closureReason,
+        price: venue.pricePerHour,
+      };
+    });
   }
 
   async adminFindAll(query: QueryVenuesDto) {
@@ -218,5 +246,36 @@ export class VenuesService {
 
   async remove(id: string) {
     return this.prisma.venue.delete({ where: { id } });
+  }
+
+  async createClosure(venueId: string, dto: CreateVenueClosureDto) {
+    const venue = await this.prisma.venue.findUnique({ where: { id: venueId } });
+    if (!venue) throw new NotFoundException(`Venue dengan ID ${venueId} tidak ditemukan`);
+
+    const dateObj = new Date(dto.date + 'T00:00:00.000Z');
+
+    return this.prisma.venueClosure.create({
+      data: {
+        venueId,
+        date: dateObj,
+        startTime: dto.startTime || null,
+        endTime: dto.endTime || null,
+        reason: dto.reason,
+      },
+    });
+  }
+
+  async getClosures(venueId: string) {
+    return this.prisma.venueClosure.findMany({
+      where: { venueId },
+      orderBy: { date: 'asc' },
+    });
+  }
+
+  async deleteClosure(id: string) {
+    const closure = await this.prisma.venueClosure.findUnique({ where: { id } });
+    if (!closure) throw new NotFoundException('Penutupan venue tidak ditemukan');
+
+    return this.prisma.venueClosure.delete({ where: { id } });
   }
 }

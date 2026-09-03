@@ -91,6 +91,7 @@ model Venue {
   bookings        Booking[]
   reviews         Review[]
   favorites       Favorite[]
+  closures        VenueClosure[]
 
   @@map("venues")
 }
@@ -220,3 +221,19 @@ model Notification {
 
   @@map("notifications")
 }
+
+model VenueClosure {
+  id        String   @id @default(uuid())
+  venueId   String   @map("venue_id")
+  date      DateTime @db.Date
+  startTime String?  @map("start_time") @db.VarChar(5)
+  endTime   String?  @map("end_time") @db.VarChar(5)
+  reason    String   @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  venue     Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([venueId, date])
+  @@map("venue_closures")
+}
+

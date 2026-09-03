@@ -146,4 +146,107 @@ export class ReviewsService {
       },
     });
   }
+
+  async adminFindAll(query: {
+    search?: string;
+    rating?: number;
+    venueId?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page ? +query.page : 1;
+    const limit = query.limit ? +query.limit : 10;
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+    if (query.rating) {
+      where.rating = +query.rating;
+    }
+    if (query.venueId) {
+      where.venueId = query.venueId;
+    }
+    if (query.search) {
+      where.OR = [
+        { comment: { contains: query.search, mode: 'insensitive' } },
+        { user: { fullName: { contains: query.search, mode: 'insensitive' } } },
+        { user: { email: { contains: query.search, mode: 'insensitive' } } },
+        { venue: { name: { contains: query.search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [reviews, total] = await Promise.all([
+      this.prisma.review.findMany({
+        where,
+        include: {
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              avatarUrl: true,
+            },
+          },
+          venue: {
+            select: {
+              id: true,
+              name: true,
+              city: true,
+            },
+          },
+          booking: {
+            select: {
+              id: true,
+              bookingCode: true,
+              date: true,
+            },
+          },
+        },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.review.count({ where }),
+    ]);
+
+    return {
+      data: reviews,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async adminDelete(id: string) {
+    const review = await this.prisma.review.findUnique({
+      where: { id },
+    });
+
+    if (!review) {
+      throw new NotFoundException(`Review dengan ID ${id} tidak ditemukan`);
+    }
+
+    await this.prisma.review.delete({
+      where: { id },
+    });
+
+    // Recalculate venue rating and review count
+    const venueStats = await this.prisma.review.aggregate({
+      where: { venueId: review.venueId },
+      _avg: { rating: true },
+      _count: { id: true },
+    });
+
+    await this.prisma.venue.update({
+      where: { id: review.venueId },
+      data: {
+        rating: venueStats._avg.rating || 0,
+        reviewCount: venueStats._count.id || 0,
+      },
+    });
+
+    return { message: 'Review berhasil dihapus', id };
+  }
 }
