@@ -34,4 +34,13 @@ export class VenuesController {
   ) {
     return this.venuesService.getTimeSlots(id, date);
   }
+
+  @Get(':id/slots')
+  @ApiOperation({ summary: 'Alias for get time slots' })
+  getSlots(
+    @Param('id') id: string,
+    @Query('date') date: string,
+  ) {
+    return this.venuesService.getTimeSlots(id, date);
+  }
 }

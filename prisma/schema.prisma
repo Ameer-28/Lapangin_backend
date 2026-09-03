@@ -55,6 +55,8 @@ model User {
   emailNotifications  Boolean   @default(true) @map("email_notifications")
   bookingAlerts       Boolean   @default(true) @map("booking_alerts")
   promoNotifications  Boolean   @default(true) @map("promo_notifications")
+  resetPasswordToken   String?   @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime? @map("reset_password_expires")
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 

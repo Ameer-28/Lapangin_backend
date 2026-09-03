@@ -1,9 +1,12 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -65,6 +68,73 @@ export class AuthService {
     }
 
     return this.generateToken(user);
+  }
+
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const email = dto.email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    let rawToken: string | undefined;
+
+    if (user) {
+      // Generate 32-byte secure random token
+      rawToken = crypto.randomBytes(32).toString('hex');
+      // Hash with SHA-256 for secure DB storage
+      const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+      // Expire in 1 hour
+      const expires = new Date(Date.now() + 60 * 60 * 1000);
+
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          resetPasswordToken: hashedToken,
+          resetPasswordExpires: expires,
+        },
+      });
+
+      console.log(`[PASSWORD RESET] Email: ${user.email}, Token: ${rawToken}`);
+    }
+
+    // Do NOT reveal whether an email exists in the system through the response
+    return {
+      message: 'Jika email terdaftar di sistem kami, instruksi reset password telah dikirimkan.',
+      ...(process.env.NODE_ENV !== 'production' && rawToken ? { resetToken: rawToken } : {}),
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const hashedToken = crypto.createHash('sha256').update(dto.token).digest('hex');
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        resetPasswordToken: hashedToken,
+        resetPasswordExpires: {
+          gt: new Date(),
+        },
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Token reset password tidak valid atau telah kadaluarsa');
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
+
+    // Atomically update password and invalidate token (single-use)
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: hashedPassword,
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+      },
+    });
+
+    return {
+      message: 'Password berhasil diperbarui. Silakan login dengan password baru Anda.',
+    };
   }
 
   async validateGoogleUser(googleUser: { email: string; fullName: string; avatarUrl?: string }) {
