@@ -94,13 +94,33 @@ model Venue {
   reviews         Review[]
   favorites       Favorite[]
   closures        VenueClosure[]
+  courts          Court[]
 
   @@map("venues")
+}
+
+model Court {
+  id          String     @id @default(uuid())
+  venueId     String     @map("venue_id")
+  name        String     @db.VarChar(100)
+  description String?    @db.Text
+  courtType   String     @default("Vinyl") @map("court_type") @db.VarChar(50)
+  pricePerHour Int?      @map("price_per_hour")
+  isActive    Boolean    @default(true) @map("is_active")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  venue       Venue      @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  bookings    Booking[]
+  timeSlots   TimeSlot[]
+
+  @@map("courts")
 }
 
 model TimeSlot {
   id          String   @id @default(uuid())
   venueId     String   @map("venue_id")
+  courtId     String?  @map("court_id")
   date        DateTime @db.Date
   startTime   String   @map("start_time") @db.VarChar(5) // e.g. "07:00"
   isBooked    Boolean  @default(false) @map("is_booked")
@@ -109,9 +129,10 @@ model TimeSlot {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   venue       Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  court       Court?   @relation(fields: [courtId], references: [id], onDelete: Cascade)
   booking     Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
 
-  @@unique([venueId, date, startTime])
+  @@unique([courtId, date, startTime])
   @@map("time_slots")
 }
 
@@ -120,6 +141,7 @@ model Booking {
   bookingCode     String        @unique @map("booking_code") @db.VarChar(20)
   userId          String        @map("user_id")
   venueId         String        @map("venue_id")
+  courtId         String?       @map("court_id")
   date            DateTime      @db.Date
   startTime       String        @map("start_time") @db.VarChar(5)
   durationHours   Int           @map("duration_hours")
@@ -146,6 +168,7 @@ model Booking {
 
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   venue           Venue         @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  court           Court?        @relation(fields: [courtId], references: [id], onDelete: SetNull)
   timeSlots       TimeSlot[]
   review          Review?
 

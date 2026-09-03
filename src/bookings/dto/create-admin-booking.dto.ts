@@ -7,6 +7,11 @@ export class CreateAdminBookingDto {
   @IsNotEmpty()
   venueId: string;
 
+  @ApiPropertyOptional({ description: 'ID lapangan (court) spesifik' })
+  @IsString()
+  @IsOptional()
+  courtId?: string;
+
   @ApiProperty({ description: 'Tanggal booking (format YYYY-MM-DD)', example: '2026-09-04' })
   @IsString()
   @IsNotEmpty()

@@ -175,6 +175,36 @@ export class BookingsService {
 
       const bookingDate = new Date(dto.date + 'T00:00:00.000Z');
 
+      // 2a. Determine target Court
+      let targetCourt: any;
+      if (dto.courtId) {
+        targetCourt = await tx.court.findUnique({
+          where: { id: dto.courtId },
+        });
+        if (!targetCourt || targetCourt.venueId !== dto.venueId) {
+          throw new BadRequestException('Lapangan yang dipilih tidak valid untuk venue ini');
+        }
+        if (!targetCourt.isActive) {
+          throw new BadRequestException('Lapangan ini sedang tidak aktif / tidak dapat dibooking');
+        }
+      } else {
+        targetCourt = await tx.court.findFirst({
+          where: { venueId: dto.venueId, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (!targetCourt) {
+          targetCourt = await tx.court.create({
+            data: {
+              venueId: dto.venueId,
+              name: 'Lapangan 1 (Utama)',
+              courtType: venue.type === 'Outdoor' ? 'Rumput Sintetis' : 'Vinyl',
+              pricePerHour: venue.pricePerHour,
+            },
+          });
+        }
+      }
+      const targetCourtId = targetCourt.id;
+
       // Check operational closures
       const closures = await tx.venueClosure.findMany({
         where: { venueId: dto.venueId, date: bookingDate },
@@ -192,9 +222,10 @@ export class BookingsService {
         }
       }
 
+      // Check existing slots for THIS COURT
       const existingSlots = await tx.timeSlot.findMany({
         where: {
-          venueId: dto.venueId,
+          courtId: targetCourtId,
           date: bookingDate,
           startTime: { in: slotsToCheck },
         },
@@ -202,11 +233,12 @@ export class BookingsService {
 
       const isAnyBooked = existingSlots.some(slot => slot.isBooked);
       if (isAnyBooked) {
-        throw new BadRequestException('One or more selected time slots are already booked');
+        throw new BadRequestException(`Salah satu atau lebih slot waktu yang dipilih di ${targetCourt.name} sudah terisi`);
       }
 
-      // 3. Calculate pricing
-      const subtotal = venue.pricePerHour * dto.durationHours;
+      // 3. Calculate pricing using court rate if specified, else venue rate
+      const hourlyPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
+      const subtotal = hourlyPrice * dto.durationHours;
       let discount = 0;
       let usedPromo = null;
 
@@ -252,6 +284,7 @@ export class BookingsService {
           bookingCode,
           userId,
           venueId: dto.venueId,
+          courtId: targetCourtId,
           date: bookingDate,
           startTime: dto.startTime,
           durationHours: dto.durationHours,
@@ -268,21 +301,23 @@ export class BookingsService {
         },
         include: {
           venue: true,
+          court: true,
         }
       });
 
-      // 6. Mark time slots as booked
+      // 6. Mark time slots as booked for this court
       for (const time of slotsToCheck) {
         const existingSlot = existingSlots.find(s => s.startTime === time);
         if (existingSlot) {
           await tx.timeSlot.update({
             where: { id: existingSlot.id },
-            data: { isBooked: true, bookingId: booking.id },
+            data: { isBooked: true, bookingId: booking.id, venueId: dto.venueId },
           });
         } else {
           await tx.timeSlot.create({
             data: {
               venueId: dto.venueId,
+              courtId: targetCourtId,
               date: bookingDate,
               startTime: time,
               isBooked: true,
@@ -337,7 +372,10 @@ export class BookingsService {
         include: {
           venue: {
             select: { name: true, imageUrl: true }
-          }
+          },
+          court: {
+            select: { id: true, name: true, courtType: true }
+          },
         }
       }),
       this.prisma.booking.count({ where })
@@ -357,6 +395,7 @@ export class BookingsService {
       where: { id },
       include: {
         venue: true,
+        court: true,
         user: {
           select: { id: true, email: true, fullName: true, phone: true }
         }
@@ -446,6 +485,7 @@ export class BookingsService {
         { customerName: { contains: search, mode: 'insensitive' } },
         { user: { fullName: { contains: search, mode: 'insensitive' } } },
         { venue: { name: { contains: search, mode: 'insensitive' } } },
+        { court: { name: { contains: search, mode: 'insensitive' } } },
       ];
     }
 
@@ -458,6 +498,9 @@ export class BookingsService {
         include: {
           venue: {
             select: { name: true, city: true, pricePerHour: true }
+          },
+          court: {
+            select: { id: true, name: true, courtType: true, pricePerHour: true }
           },
           user: {
             select: { fullName: true, email: true, phone: true }
@@ -572,10 +615,38 @@ export class BookingsService {
 
       const bookingDate = new Date(dto.date + 'T00:00:00.000Z');
 
-      // 1. Conflict Check: Overlapping Bookings on the same venue & date
+      // Determine target court
+      let targetCourt: any;
+      if (dto.courtId) {
+        targetCourt = await tx.court.findUnique({
+          where: { id: dto.courtId },
+        });
+        if (!targetCourt || targetCourt.venueId !== dto.venueId) {
+          throw new NotFoundException('Lapangan tidak ditemukan di venue ini');
+        }
+      } else {
+        targetCourt = await tx.court.findFirst({
+          where: { venueId: dto.venueId, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (!targetCourt) {
+          targetCourt = await tx.court.create({
+            data: {
+              venueId: dto.venueId,
+              name: 'Lapangan 1 (Utama)',
+              courtType: venue.type === 'Outdoor' ? 'Rumput Sintetis' : 'Vinyl',
+              pricePerHour: venue.pricePerHour,
+            },
+          });
+        }
+      }
+      const targetCourtId = targetCourt.id;
+
+      // 1. Conflict Check: Overlapping Bookings on the same court & date
       const activeBookings = await tx.booking.findMany({
         where: {
           venueId: dto.venueId,
+          courtId: targetCourtId,
           date: bookingDate,
           status: { in: ['upcoming', 'pending_payment'] },
         },
@@ -606,15 +677,15 @@ export class BookingsService {
           const bookedByName = ob.customerName || ob.user?.fullName || 'Customer';
 
           throw new ConflictException(
-            `Jadwal bentrok pada pukul ${overlapStart} - ${overlapEnd}! Slot sudah dipesan/diblokir oleh ${conflictType} atas nama "${bookedByName}". Silakan pilih jam atau tanggal lain.`
+            `Jadwal bentrok pada pukul ${overlapStart} - ${overlapEnd} di ${targetCourt.name}! Slot sudah dipesan/diblokir oleh ${conflictType} atas nama "${bookedByName}". Silakan pilih jam atau lapangan lain.`
           );
         }
       }
 
-      // 2. Conflict Check: Physical TimeSlots table
+      // 2. Conflict Check: Physical TimeSlots table for this court
       const existingSlots = await tx.timeSlot.findMany({
         where: {
-          venueId: dto.venueId,
+          courtId: targetCourtId,
           date: bookingDate,
           startTime: { in: slotsToCheck },
         },
@@ -626,13 +697,14 @@ export class BookingsService {
       for (const slot of existingSlots) {
         if (slot.isBooked && slot.booking?.status !== 'expired' && slot.booking?.status !== 'cancelled') {
           throw new ConflictException(
-            `Slot jam ${slot.startTime} pada tanggal ${dto.date} sudah terisi atau diblokir. Silakan pilih jam lain.`
+            `Slot jam ${slot.startTime} di ${targetCourt.name} pada tanggal ${dto.date} sudah terisi atau diblokir. Silakan pilih jam lain.`
           );
         }
       }
 
       // Calculate pricing
-      const subtotal = dto.price !== undefined ? dto.price : (venue.pricePerHour * dto.durationHours);
+      const hourlyPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
+      const subtotal = dto.price !== undefined ? dto.price : (hourlyPrice * dto.durationHours);
       const total = subtotal;
 
       // Generate unique offline booking code
@@ -649,6 +721,7 @@ export class BookingsService {
           bookingCode,
           userId: adminId,
           venueId: dto.venueId,
+          courtId: targetCourtId,
           date: bookingDate,
           startTime: dto.startTime,
           durationHours: dto.durationHours,
@@ -669,21 +742,23 @@ export class BookingsService {
         },
         include: {
           venue: true,
+          court: true,
         },
       });
 
-      // Mark time slots as booked
+      // Mark time slots as booked for this court
       for (const time of slotsToCheck) {
         const existingSlot = existingSlots.find(s => s.startTime === time);
         if (existingSlot) {
           await tx.timeSlot.update({
             where: { id: existingSlot.id },
-            data: { isBooked: true, bookingId: booking.id },
+            data: { isBooked: true, bookingId: booking.id, venueId: dto.venueId },
           });
         } else {
           await tx.timeSlot.create({
             data: {
               venueId: dto.venueId,
+              courtId: targetCourtId,
               date: bookingDate,
               startTime: time,
               isBooked: true,
@@ -739,6 +814,16 @@ export class BookingsService {
     }
 
     return await this.prisma.$transaction(async (tx) => {
+      // Determine target court for reschedule
+      let targetCourtId: string | null = dto.newCourtId || booking.courtId || null;
+      if (!targetCourtId) {
+        const defaultCourt = await tx.court.findFirst({
+          where: { venueId: booking.venueId, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        targetCourtId = defaultCourt ? defaultCourt.id : null;
+      }
+
       // 3. Check venue closures
       const closures = await tx.venueClosure.findMany({
         where: { venueId: booking.venueId, date: newBookingDate },
@@ -757,10 +842,11 @@ export class BookingsService {
         }
       }
 
-      // 4. Check overlapping bookings (excluding the current booking itself)
+      // 4. Check overlapping bookings on the target court (excluding the current booking itself)
       const activeBookings = await tx.booking.findMany({
         where: {
           venueId: booking.venueId,
+          courtId: targetCourtId,
           date: newBookingDate,
           id: { not: bookingId },
           status: { in: ['upcoming', 'pending_payment'] },
@@ -786,15 +872,15 @@ export class BookingsService {
               : 'Booking Terkonfirmasi';
           const bookedByName = ob.customerName || ob.user?.fullName || 'Customer';
           throw new ConflictException(
-            `Jadwal baru bentrok dengan ${conflictType} atas nama "${bookedByName}" pada jam ${ob.startTime}. Silakan pilih waktu lain.`
+            `Jadwal baru bentrok dengan ${conflictType} atas nama "${bookedByName}" pada jam ${ob.startTime}. Silakan pilih waktu atau lapangan lain.`
           );
         }
       }
 
-      // 5. Check physical time slots
+      // 5. Check physical time slots on target court
       const existingSlots = await tx.timeSlot.findMany({
         where: {
-          venueId: booking.venueId,
+          courtId: targetCourtId,
           date: newBookingDate,
           startTime: { in: newSlotsToCheck },
         },
@@ -815,7 +901,7 @@ export class BookingsService {
         data: { isBooked: false, bookingId: null },
       });
 
-      // 7. Reserve new slots
+      // 7. Reserve new slots on target court
       for (const time of newSlotsToCheck) {
         const existingSlot = existingSlots.find(s => s.startTime === time);
         if (existingSlot) {
@@ -827,6 +913,7 @@ export class BookingsService {
           await tx.timeSlot.create({
             data: {
               venueId: booking.venueId,
+              courtId: targetCourtId,
               date: newBookingDate,
               startTime: time,
               isBooked: true,
@@ -844,12 +931,14 @@ export class BookingsService {
       const updatedBooking = await tx.booking.update({
         where: { id: bookingId },
         data: {
+          courtId: targetCourtId,
           date: newBookingDate,
           startTime: dto.newStartTime,
           adminNotes: updatedAdminNotes,
         },
         include: {
           venue: true,
+          court: true,
           user: true,
         },
       });

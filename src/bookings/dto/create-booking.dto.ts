@@ -7,6 +7,11 @@ export class CreateBookingDto {
   @IsNotEmpty()
   venueId: string;
 
+  @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174000' })
+  @IsUUID()
+  @IsOptional()
+  courtId?: string;
+
   @ApiProperty({ example: '2023-12-01' })
   @IsString()
   @IsNotEmpty()

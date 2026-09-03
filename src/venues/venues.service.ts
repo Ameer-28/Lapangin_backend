@@ -55,7 +55,10 @@ export class VenuesService {
     const venue = await this.prisma.venue.findUnique({
       where: { id },
       include: {
-        _count: { select: { reviews: true } }
+        _count: { select: { reviews: true } },
+        courts: {
+          orderBy: { createdAt: 'asc' },
+        },
       }
     });
 
@@ -66,10 +69,38 @@ export class VenuesService {
     return venue;
   }
 
-  async getTimeSlots(venueId: string, dateStr: string) {
-    const venue = await this.prisma.venue.findUnique({ where: { id: venueId } });
+  async getTimeSlots(venueId: string, dateStr: string, courtId?: string) {
+    const venue = await this.prisma.venue.findUnique({ 
+      where: { id: venueId },
+      include: {
+        courts: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
     if (!venue) throw new NotFoundException(`Venue with ID ${venueId} not found`);
 
+    let targetCourt: any = courtId 
+      ? venue.courts.find(c => c.id === courtId)
+      : venue.courts.find(c => c.isActive) || venue.courts[0];
+
+    if (!targetCourt && courtId) {
+      targetCourt = (await this.prisma.court.findUnique({ where: { id: courtId } })) as any;
+    }
+
+    if (!targetCourt) {
+      targetCourt = (await this.prisma.court.create({
+        data: {
+          venueId,
+          name: 'Lapangan 1 (Utama)',
+          courtType: venue.type === 'Outdoor' ? 'Rumput Sintetis' : 'Vinyl',
+          pricePerHour: venue.pricePerHour,
+        },
+      })) as any;
+    }
+
+    const targetCourtId = targetCourt.id;
+    const courtPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
     const dateObj = new Date(dateStr + 'T00:00:00.000Z');
 
     // Auto-release any unpaid customer booking slots that exceeded 15 min hold timeout
@@ -78,6 +109,7 @@ export class VenuesService {
       const expiredUnpaid = await this.prisma.booking.findMany({
         where: {
           venueId,
+          courtId: targetCourtId,
           date: dateObj,
           status: 'upcoming',
           paymentStatus: { in: ['unpaid', 'pending'] },
@@ -111,7 +143,7 @@ export class VenuesService {
     }
 
     let slots = await this.prisma.timeSlot.findMany({
-      where: { venueId, date: dateObj },
+      where: { courtId: targetCourtId, date: dateObj },
       orderBy: { startTime: 'asc' },
     });
 
@@ -121,13 +153,14 @@ export class VenuesService {
       return !isNaN(h) && h >= startHour && h < endHour;
     });
 
-    // Auto-generate time slots for the day if none exist
+    // Auto-generate time slots for the court on this day if none exist
     if (slots.length === 0) {
       const newSlots = [];
       for (let i = startHour; i < endHour; i++) {
         const startTime = `${i.toString().padStart(2, '0')}:00`;
         newSlots.push({
           venueId,
+          courtId: targetCourtId,
           date: dateObj,
           startTime,
           isBooked: false,
@@ -139,7 +172,7 @@ export class VenuesService {
       });
 
       slots = await this.prisma.timeSlot.findMany({
-        where: { venueId, date: dateObj },
+        where: { courtId: targetCourtId, date: dateObj },
         orderBy: { startTime: 'asc' },
       });
 
@@ -175,11 +208,14 @@ export class VenuesService {
 
       return {
         id: slot.id,
+        courtId: targetCourtId,
+        courtName: targetCourt.name,
+        courtType: targetCourt.courtType,
         startTime: slot.startTime,
         isBooked: slot.isBooked || isClosed,
         isClosed,
         closureReason,
-        price: venue.pricePerHour,
+        price: courtPrice,
       };
     });
   }

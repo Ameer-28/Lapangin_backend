@@ -14,6 +14,11 @@ export class RescheduleBookingDto {
   @Matches(/^([01]\d|2[0-3]):00$/, { message: 'StartTime must be in HH:00 format' })
   newStartTime: string;
 
+  @ApiPropertyOptional({ description: 'ID lapangan baru jika dipindahkan ke lapangan lain' })
+  @IsString()
+  @IsOptional()
+  newCourtId?: string;
+
   @ApiPropertyOptional({ description: 'Alasan reschedule / catatan admin', example: 'Permintaan customer via telepon' })
   @IsString()
   @IsOptional()

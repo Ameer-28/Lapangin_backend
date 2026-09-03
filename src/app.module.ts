@@ -15,6 +15,7 @@ import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { ReportsModule } from './reports/reports.module';
 import { SettingsModule } from './settings/settings.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { CourtsModule } from './courts/courts.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ReportsModule,
     SettingsModule,
     NotificationsModule,
+    CourtsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

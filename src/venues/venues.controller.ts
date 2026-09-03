@@ -27,12 +27,13 @@ export class VenuesController {
   }
 
   @Get(':id/time-slots')
-  @ApiOperation({ summary: 'Get time slots for a venue on a specific date' })
+  @ApiOperation({ summary: 'Get time slots for a venue and court on a specific date' })
   getTimeSlots(
     @Param('id') id: string,
     @Query('date') date: string,
+    @Query('courtId') courtId?: string,
   ) {
-    return this.venuesService.getTimeSlots(id, date);
+    return this.venuesService.getTimeSlots(id, date, courtId);
   }
 
   @Get(':id/slots')
@@ -40,7 +41,8 @@ export class VenuesController {
   getSlots(
     @Param('id') id: string,
     @Query('date') date: string,
+    @Query('courtId') courtId?: string,
   ) {
-    return this.venuesService.getTimeSlots(id, date);
+    return this.venuesService.getTimeSlots(id, date, courtId);
   }
 }
