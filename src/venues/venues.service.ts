@@ -4,10 +4,14 @@ import { QueryVenuesDto } from './dto/query-venues.dto';
 import { CreateVenueDto } from './dto/create-venue.dto';
 import { UpdateVenueDto } from './dto/update-venue.dto';
 import { CreateVenueClosureDto } from './dto/create-venue-closure.dto';
+import { PricingRulesService } from '../pricing-rules/pricing-rules.service';
 
 @Injectable()
 export class VenuesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pricingRulesService: PricingRulesService,
+  ) {}
 
   async findAll(query: QueryVenuesDto) {
     const { search, type, minRating, minPrice, maxPrice, page = 1, limit = 10 } = query;
@@ -186,6 +190,16 @@ export class VenuesService {
       where: { venueId, date: dateObj },
     });
 
+    const slotTimes = slots.map(s => s.startTime);
+    const resolvedPrices = await this.pricingRulesService.resolveMultiSlotPrices(
+      venueId,
+      targetCourtId,
+      dateObj,
+      slotTimes,
+      courtPrice,
+    );
+    const priceMap = new Map(resolvedPrices.map(r => [r.time, r]));
+
     return slots.map(slot => {
       let isClosed = false;
       let closureReason: string | undefined;
@@ -206,6 +220,8 @@ export class VenuesService {
         }
       }
 
+      const priceInfo = priceMap.get(slot.startTime);
+
       return {
         id: slot.id,
         courtId: targetCourtId,
@@ -215,7 +231,8 @@ export class VenuesService {
         isBooked: slot.isBooked || isClosed,
         isClosed,
         closureReason,
-        price: courtPrice,
+        price: priceInfo ? priceInfo.price : courtPrice,
+        pricingRule: priceInfo ? priceInfo.ruleName : null,
       };
     });
   }

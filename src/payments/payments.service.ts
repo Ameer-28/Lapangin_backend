@@ -68,25 +68,52 @@ export class PaymentsService {
     // Generate unique order ID
     const orderId = `LAPANGIN-${booking.bookingCode}-${Date.now()}`;
 
+    // Build item details matching gross_amount exactly
+    const itemDetails: any[] = [];
+    const breakdown = Array.isArray(booking.priceBreakdown) ? (booking.priceBreakdown as any[]) : null;
+
+    if (breakdown && breakdown.length > 0) {
+      for (const slot of breakdown) {
+        itemDetails.push({
+          id: `${booking.venueId}-${slot.time}`.slice(0, 50),
+          price: slot.price,
+          quantity: 1,
+          name: `${booking.venue.name} (${slot.time}${slot.ruleName ? ' - ' + slot.ruleName : ''})`.slice(0, 50),
+        });
+      }
+    } else {
+      itemDetails.push({
+        id: booking.venueId.slice(0, 50),
+        price: booking.subtotal,
+        quantity: 1,
+        name: `Sewa ${booking.venue.name} (${booking.durationHours} jam)`.slice(0, 50),
+      });
+    }
+
+    if (booking.serviceFee > 0) {
+      itemDetails.push({
+        id: 'SERVICE_FEE',
+        price: booking.serviceFee,
+        quantity: 1,
+        name: 'Service Fee',
+      });
+    }
+
+    if (booking.discount > 0) {
+      itemDetails.push({
+        id: 'DISCOUNT',
+        price: -Math.round(booking.discount),
+        quantity: 1,
+        name: `Promo (${booking.promoCode || 'Diskon'})`.slice(0, 50),
+      });
+    }
+
     const transactionParams = {
       transaction_details: {
         order_id: orderId,
         gross_amount: booking.total,
       },
-      item_details: [
-        {
-          id: booking.venueId,
-          price: booking.venue.pricePerHour,
-          quantity: booking.durationHours,
-          name: `${booking.venue.name} - ${booking.startTime}`,
-        },
-        {
-          id: 'SERVICE_FEE',
-          price: booking.serviceFee,
-          quantity: 1,
-          name: 'Service Fee',
-        },
-      ],
+      item_details: itemDetails,
       customer_details: {
         first_name: booking.user.fullName,
         email: booking.user.email,
@@ -96,17 +123,6 @@ export class PaymentsService {
         finish: `${process.env.FRONTEND_URL || 'http://localhost:3001'}/bookings/status?bookingId=${booking.id}`,
       },
     };
-
-    // Handle discount as a negative item
-    if (booking.discount > 0) {
-      const discountAmount = Math.round(booking.subtotal * booking.discount);
-      transactionParams.item_details.push({
-        id: 'DISCOUNT',
-        price: -discountAmount,
-        quantity: 1,
-        name: `Promo Discount (${booking.promoCode || 'Promo'})`,
-      });
-    }
 
     try {
       const transaction = await this.snap.createTransaction(transactionParams);

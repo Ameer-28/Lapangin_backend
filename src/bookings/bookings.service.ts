@@ -6,13 +6,18 @@ import { CreateBookingDto } from './dto/create-booking.dto';
 import { QueryBookingsDto } from './dto/query-bookings.dto';
 import { CreateAdminBookingDto } from './dto/create-admin-booking.dto';
 import { RescheduleBookingDto } from './dto/reschedule-booking.dto';
+import { PricingRulesService } from '../pricing-rules/pricing-rules.service';
 
 @Injectable()
 export class BookingsService {
   private readonly logger = new Logger(BookingsService.name);
   private isCancellingUnpaid = false;
 
-  constructor(private prisma: PrismaService, private notificationsService: NotificationsService) {}
+  constructor(
+    private prisma: PrismaService,
+    private notificationsService: NotificationsService,
+    private pricingRulesService: PricingRulesService,
+  ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS)
   async handleCronAutoCancelUnpaid() {
@@ -236,9 +241,16 @@ export class BookingsService {
         throw new BadRequestException(`Salah satu atau lebih slot waktu yang dipilih di ${targetCourt.name} sudah terisi`);
       }
 
-      // 3. Calculate pricing using court rate if specified, else venue rate
-      const hourlyPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
-      const subtotal = hourlyPrice * dto.durationHours;
+      // 3. Calculate pricing using per-slot pricing rules
+      const baseHourlyPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
+      const slotPriceList = await this.pricingRulesService.resolveMultiSlotPrices(
+        dto.venueId,
+        targetCourtId,
+        bookingDate,
+        slotsToCheck,
+        baseHourlyPrice,
+      );
+      const subtotal = slotPriceList.reduce((sum, item) => sum + item.price, 0);
       let discount = 0;
       let usedPromo = null;
 
@@ -252,7 +264,7 @@ export class BookingsService {
         if (new Date(usedPromo.validUntil) < new Date()) throw new BadRequestException('Promo code expired');
         if (usedPromo.usedCount >= usedPromo.maxUses) throw new BadRequestException('Promo code usage limit exceeded');
 
-        discount = subtotal * (usedPromo.discountPct / 100);
+        discount = Math.round(subtotal * (usedPromo.discountPct / 100));
       }
 
       const serviceFee = 5000;
@@ -292,6 +304,7 @@ export class BookingsService {
           discount,
           serviceFee,
           total,
+          priceBreakdown: slotPriceList,
           status: 'pending_payment',
           paymentExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
           paymentStatus: 'pending',
@@ -703,8 +716,22 @@ export class BookingsService {
       }
 
       // Calculate pricing
-      const hourlyPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
-      const subtotal = dto.price !== undefined ? dto.price : (hourlyPrice * dto.durationHours);
+      const baseHourlyPrice = targetCourt.pricePerHour ?? venue.pricePerHour;
+      let subtotal: number;
+      let slotPriceList: any = null;
+
+      if (dto.price !== undefined) {
+        subtotal = dto.price;
+      } else {
+        slotPriceList = await this.pricingRulesService.resolveMultiSlotPrices(
+          dto.venueId,
+          targetCourtId,
+          bookingDate,
+          slotsToCheck,
+          baseHourlyPrice,
+        );
+        subtotal = slotPriceList.reduce((sum: number, item: any) => sum + item.price, 0);
+      }
       const total = subtotal;
 
       // Generate unique offline booking code
@@ -729,6 +756,7 @@ export class BookingsService {
           discount: 0,
           serviceFee: 0,
           total,
+          priceBreakdown: slotPriceList,
           status: 'upcoming',
           bookingSource,
           adminNotes: dto.notes,
